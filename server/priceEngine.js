@@ -51,10 +51,28 @@ export function checkAlerts(db, productIds, now = Date.now()) {
   return hits.length;
 }
 
+/**
+ * Keep storage bounded: hourly points for the last 7 days, one point per day (the day's last)
+ * before that, and nothing older than a year.
+ */
+export function compactHistory(db, now = Date.now()) {
+  const weekAgo = now - 7 * 86_400_000;
+  const r1 = db.prepare(`DELETE FROM price_history WHERE ts < ? AND (listing_id, ts) NOT IN (
+      SELECT listing_id, MAX(ts) FROM price_history WHERE ts < ? GROUP BY listing_id, ts / 86400000)`).run(weekAgo, weekAgo);
+  const r2 = db.prepare('DELETE FROM price_history WHERE ts < ?').run(now - 366 * 86_400_000);
+  return r1.changes + r2.changes;
+}
+
 export function startPriceEngine(db, intervalMs, log = console) {
   if (!intervalMs) return () => {};
+  let lastCompaction = 0;
   const timer = setInterval(() => {
     try {
+      if (Date.now() - lastCompaction > 86_400_000) {
+        lastCompaction = Date.now();
+        const removed = compactHistory(db);
+        if (removed) { dataVersion.v++; log.info?.(`[prices] compacted ${removed} history points`); }
+      }
       const r = refreshPrices(db);
       if (r.changedProducts) log.info?.(`[prices] refreshed ${r.checked} listings, ${r.changedProducts} products changed`);
     } catch (e) { log.error?.('[prices] refresh failed', e); }

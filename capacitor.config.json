@@ -4,5 +4,6 @@
   "webDir": "dist",
   "backgroundColor": "#f6f7fb",
   "android": { "allowMixedContent": false },
-  "server": { "androidScheme": "https" }
+  "server": { "androidScheme": "https" },
+  "plugins": { "LocalNotifications": { "smallIcon": "ic_stat_kompare", "iconColor": "#4F46E5" } }
 }

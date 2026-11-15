@@ -2,7 +2,8 @@ import { memo, type ReactNode } from 'react';
 import { Link } from 'react-router-dom';
 import type { Summary } from '../lib/api';
 import { useMeta } from '../lib/hooks';
-import { useQuickView } from './QuickView';
+import { productQuery, useQuickView } from './QuickView';
+import { useQueryClient } from '@tanstack/react-query';
 import { money, compact } from '../lib/format';
 
 export const Thumb = memo(function Thumb({ emoji, hue, size = 'md' }: { emoji: string; hue: number; size?: 'sm' | 'md' | 'lg' }) {
@@ -34,8 +35,11 @@ export function Stars({ value, count }: { value: number; count?: number }) {
 export const ProductCard = memo(function ProductCard({ p }: { p: Summary }) {
   const quickView = useQuickView();
   const { platforms } = useMeta();
+  const qc = useQueryClient();
+  // Start loading offers the moment a finger touches the card, so the pop-up opens with data ready.
+  const prefetch = () => { qc.prefetchQuery({ ...productQuery(p.slug), staleTime: 20_000 }); };
   return (
-    <Link to={`/p/${p.slug}`} className="card pcard" onClick={(e) => {
+    <Link to={`/p/${p.slug}`} className="card pcard" onPointerDown={prefetch} onMouseEnter={prefetch} onClick={(e) => {
       // Plain click opens the quick-compare pop-up; ctrl/cmd/middle-click still opens the full page.
       if (e.metaKey || e.ctrlKey || e.shiftKey || e.button !== 0) return;
       e.preventDefault();

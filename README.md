@@ -10,7 +10,7 @@ Kompare is an **Android app** (an `.apk` you install on the phone). The whole ba
 2. Under **Artifacts**, download **Kompare-android-apk** (a zip containing `Kompare.apk`).
 3. On the phone, open `Kompare.apk` and allow "Install unknown apps" when Android asks.
 
-Every push builds a new APK automatically (`.github/workflows/android.yml`). To build one on your own computer you need Android Studio, then run `npm run android:apk` (or `npm run android:open` to open the project in Android Studio).
+**Direct download (easiest):** open https://github.com/Mayur0174/kompare/releases/download/android-latest/Kompare.apk on the phone. Every push builds a new APK automatically and updates that link (`.github/workflows/android.yml`). To build one on your own computer you need Android Studio, then run `npm run android:apk` (or `npm run android:open` to open the project in Android Studio).
 
 ## Google sign-in + cloud backup (free)
 

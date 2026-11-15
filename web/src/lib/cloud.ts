@@ -119,3 +119,20 @@ export async function signOutGoogle() {
     await SocialLogin.logout({ provider: 'google' }).catch(() => {});
   }
 }
+
+export const lastBackupAt = () => { const uid = currentGoogleUid(); return uid ? readMeta(uid).pushedAt || null : null; };
+
+/** Manual "Back up now". */
+export async function backupNow() {
+  const uid = currentGoogleUid();
+  if (!uid) throw new Error('Sign in with Google to back up your data');
+  await push(uid);
+}
+
+/** Removes the cloud copy (used when deleting the account). */
+export async function deleteCloudBackup() {
+  const uid = currentGoogleUid();
+  if (!uid || !googleConfigured) return;
+  const { db, fsMod } = await firebase();
+  await fsMod.deleteDoc(fsMod.doc(db, 'users', uid)).catch(() => {});
+}

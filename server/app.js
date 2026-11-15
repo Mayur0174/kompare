@@ -10,6 +10,7 @@ import { HttpError, DAY, HOUR } from './util.js';
 import { CATEGORIES } from './catalog.js';
 import { config } from './config.js';
 import { verifyFirebaseIdToken } from './firebaseVerify.js';
+import { checkAlerts } from './priceEngine.js';
 
 // ---------- helpers ----------
 const wrap = (fn) => (req, res, next) => { try { const out = fn(req, res); if (out !== undefined) res.json(out); } catch (e) { next(e); } };
@@ -159,6 +160,7 @@ export function createApp(db, { log = console } = {}) {
     sort: z.enum(['relevance', 'price_asc', 'price_desc', 'discount', 'rating', 'drop', 'spread', 'popular', 'trending']).optional().default('relevance'),
     page: z.coerce.number().int().min(1).max(1000).optional().default(1),
     limit: z.coerce.number().int().min(1).max(60).optional().default(24),
+    slugs: z.string().max(2000).optional(), // comma-separated; returns exactly these, in this order
   });
 
   function score(s, tokens) {
@@ -174,6 +176,12 @@ export function createApp(db, { log = console } = {}) {
 
   app.get('/api/products', wrap((req) => {
     const f = parse(SearchSchema, req.query);
+    if (f.slugs) {
+      const want = f.slugs.split(',').slice(0, 30);
+      const bySlug = new Map(summaries().map((s) => [s.slug, s]));
+      const items = want.map((s) => bySlug.get(s)).filter(Boolean).map(publicSummary);
+      return { total: items.length, page: 1, pages: 1, items };
+    }
     const tokens = f.q.toLowerCase().split(/\s+/).filter(Boolean);
     let rows = summaries()
       .map((s) => ({ s, sc: score(s, tokens) }))
@@ -479,6 +487,24 @@ export function createApp(db, { log = console } = {}) {
     return { ok: true };
   }));
 
+  // ---------- profile ----------
+  app.patch('/api/auth/me', requireAuth, wrap((req) => {
+    const b = parse(z.object({ name: z.string().trim().min(2, 'Name is too short').max(60).optional(), address: AddressSchema.nullable().optional() }), req.body);
+    if (b.name !== undefined) q('UPDATE users SET name=? WHERE id=?').run(b.name, req.userId);
+    if (b.address !== undefined) q('UPDATE users SET address=? WHERE id=?').run(b.address ? JSON.stringify(b.address) : null, req.userId);
+    return { user: userView(q('SELECT * FROM users WHERE id=?').get(req.userId)) };
+  }));
+  // Permanently deletes the account and all of its data (orders, cart, alerts, watchlist, notifications).
+  app.delete('/api/auth/me', requireAuth, wrap((req) => {
+    tx(db, () => {
+      const orderIds = q('SELECT id FROM orders WHERE user_id=?').all(req.userId).map((o) => o.id);
+      for (const id of orderIds) q('DELETE FROM order_items WHERE order_id=?').run(id);
+      q('DELETE FROM users WHERE id=?').run(req.userId);
+    });
+    dataVersion.v++;
+    return { ok: true };
+  }));
+
   // ---------- watchlist ----------
   app.get('/api/watchlist', requireAuth, wrap((req) => {
     const ids = new Set(q('SELECT product_id FROM watchlist WHERE user_id=? ORDER BY created_at DESC').all(req.userId).map((r) => r.product_id));
@@ -509,7 +535,9 @@ export function createApp(db, { log = console } = {}) {
     q(`INSERT INTO alerts (user_id,product_id,target_price,active,created_at) VALUES (?,?,?,1,?)
        ON CONFLICT(user_id,product_id) DO UPDATE SET target_price=excluded.target_price, active=1, triggered_at=NULL`).run(req.userId, b.productId, b.targetPrice, Date.now());
     q('INSERT OR IGNORE INTO watchlist (user_id,product_id,created_at) VALUES (?,?,?)').run(req.userId, b.productId, Date.now());
-    return { ok: true };
+    // If the target is already met, notify right away instead of waiting for the next price refresh.
+    const triggered = checkAlerts(db, [b.productId]) > 0;
+    return { ok: true, triggered };
   }));
   app.delete('/api/alerts/:id', requireAuth, wrap((req) => {
     q('DELETE FROM alerts WHERE id=? AND user_id=?').run(Number(req.params.id), req.userId);

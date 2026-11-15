@@ -47,10 +47,10 @@ async function boot() {
   globalThis.__kompareSQL = SQL;
   globalThis.__kompareDbBytes = bytes;
   globalThis.__kompareSave = (data) => idbSet('db', data).catch((e) => console.error('[device-db] save failed', e));
-  globalThis.__kompareEnv = { NODE_ENV: 'production', JWT_SECRET: deviceSecret(), DB_FILE: ':memory:', TRUST_DEVICE_IDENTITY: '1' };
+  globalThis.__kompareEnv = { NODE_ENV: 'production', JWT_SECRET: deviceSecret(), DB_FILE: ':memory:', TRUST_DEVICE_IDENTITY: '1', REFRESH_INTERVAL_MS: '120000' };
 
   // Imported after the environment is prepared (config.js reads it at import time).
-  const [{ openDb }, { seed }, { createApp }, { startPriceEngine }, { config }] = await Promise.all([
+  const [{ openDb }, { seed }, { createApp }, { startPriceEngine, refreshPrices }, { config }] = await Promise.all([
     import('../../../server/db.js'), import('../../../server/seed.js'), import('../../../server/app.js'),
     import('../../../server/priceEngine.js'), import('../../../server/config.js'),
   ]);
@@ -70,6 +70,13 @@ async function boot() {
   // Persist immediately when the app is backgrounded.
   document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') db.flush(); });
   window.addEventListener('pagehide', () => db.flush());
+  // Catch up on prices after the app was in the background (timers are paused there).
+  let hiddenAt = 0;
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'hidden') { hiddenAt = Date.now(); return; }
+    const away = hiddenAt ? Date.now() - hiddenAt : 0;
+    if (away > config.refreshIntervalMs) refreshPrices(db, { fraction: Math.min(1, 0.2 * (away / config.refreshIntervalMs)) });
+  });
   return app;
 }
 
@@ -77,11 +84,15 @@ let ready;
 export async function localApi(path, { method = 'GET', body, token } = {}) {
   ready ||= boot();
   const app = await ready;
+  const t0 = performance.now();
   const res = app.handle({
     method,
     url: `/api${path}`,
     headers: token ? { authorization: `Bearer ${token}` } : {},
     body: body === undefined ? undefined : JSON.parse(JSON.stringify(body)),
   });
+  const ms = performance.now() - t0;
+  if (ms > 50) console.debug(`[device-api] ${method} ${path} ${ms.toFixed(0)}ms`);
+  (globalThis.__kompareTimings ||= []).push([`${method} ${path.split('?')[0]}`, Math.round(ms)]);
   return { status: res.status, body: res.body ?? {} };
 }

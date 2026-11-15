@@ -1,10 +1,12 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api, ApiError, type History } from '../lib/api';
 import { useAuth, useMeta, useTitle, useToast, useWatchToggle } from '../lib/hooks';
 import { money, date } from '../lib/format';
 import { productQuery } from '../components/QuickView';
+import { recentlyViewed } from '../lib/recent';
+import { enableNotifications, shareLink } from '../lib/native';
 import { OffersTable } from '../components/Offers';
 import { PriceChart } from '../components/PriceChart';
 import { Empty, ErrorBox, Grid, Spinner, Stars, Thumb } from '../components/ui';
@@ -26,6 +28,8 @@ export default function Product() {
   });
   const watch = useWatchToggle();
   useTitle(q.data?.product.title || '');
+  const toast = useToast();
+  useEffect(() => { if (q.data) recentlyViewed.add(q.data.product.slug); }, [q.data]);
 
   if (q.isLoading) return <div className="center pad"><Spinner /></div>;
   if (q.isError) {
@@ -55,6 +59,14 @@ export default function Product() {
             <div className="stat"><span className="xs muted">Highest</span><b>{money(overall.high)}</b></div>
           </div>
           <div className="row gap wrap">
+            <button className="btn" onClick={async () => {
+              const r = await shareLink({
+                title: p.title,
+                text: best ? `${p.title} is ${money(best.price)} on ${platforms.get(best.platformId)?.name} — compared on Kompare` : p.title,
+                url: best?.url || listings[0]?.url || '',
+              });
+              if (r === 'copied') toast('Link copied');
+            }}>↗ Share</button>
             <button className={`btn${watching ? ' active' : ''}`} disabled={watch.isPending} onClick={() => requireUser() && watch.mutate({ productId: p.id, on: !watching })}>
               {watching ? '✓ Watching' : '👀 Watch'}
             </button>
@@ -106,8 +118,15 @@ function AlertForm({ productId, current, suggested, requireUser }: {
   const qc = useQueryClient();
   const toast = useToast();
   const save = useMutation({
-    mutationFn: () => api('/alerts', { method: 'POST', body: { productId, targetPrice: Math.round(Number(value)) } }),
-    onSuccess: () => { toast(`We'll notify you when it drops to ${money(Number(value))}`); setOpen(false); qc.invalidateQueries({ queryKey: ['product'] }); qc.invalidateQueries({ queryKey: ['alerts'] }); qc.invalidateQueries({ queryKey: ['watchlist'] }); },
+    mutationFn: async () => {
+      enableNotifications().catch(() => false); // ask once for system notifications (Android 13+)
+      return api<{ ok: boolean; triggered?: boolean }>('/alerts', { method: 'POST', body: { productId, targetPrice: Math.round(Number(value)) } });
+    },
+    onSuccess: (r) => {
+      toast(r.triggered ? 'Already at or below your target. Check your notifications!' : `We'll notify you when it drops to ${money(Number(value))}`);
+      setOpen(false);
+      for (const key of ['product', 'alerts', 'watchlist', 'notifications']) qc.invalidateQueries({ queryKey: [key] });
+    },
     onError: (e: Error) => toast(e.message, 'err'),
   });
   if (!open) {

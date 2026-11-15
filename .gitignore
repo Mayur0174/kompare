@@ -10,6 +10,7 @@ android/app/src/main/assets/public/
 android/app/src/main/assets/capacitor.config.json
 android/app/src/main/assets/capacitor.plugins.json
 *.keystore
+!android/app/kompare-debug.keystore
 *.keystore.base64
 *.jks
 android/app/google-services.json

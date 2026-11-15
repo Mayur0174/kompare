@@ -4,6 +4,8 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api, qs, type Notification } from '../lib/api';
 import { useAuth, useCart, useDebounced, useToast } from '../lib/hooks';
 import { money, ago } from '../lib/format';
+import { recentSearches } from '../lib/recent';
+import { showNotifications } from '../lib/native';
 
 type Suggest = { items: { slug: string; title: string; emoji: string; bestPrice: number; category: string }[] };
 
@@ -30,6 +32,7 @@ export function SearchBox({ autoFocus, big }: { autoFocus?: boolean; big?: boole
   async function submit(e?: React.FormEvent) {
     e?.preventDefault();
     setOpen(false);
+    (document.activeElement as HTMLElement | null)?.blur(); // hide the on-screen keyboard
     const t = text.trim();
     if (active >= 0 && items[active]) return nav(`/p/${items[active].slug}`);
     if (/^https?:\/\//i.test(t)) {
@@ -39,6 +42,7 @@ export function SearchBox({ autoFocus, big }: { autoFocus?: boolean; big?: boole
       } catch (err) { toast((err as Error).message, 'err'); }
       return;
     }
+    if (t) recentSearches.add(t);
     nav(`/search${qs({ q: t })}`);
   }
 
@@ -80,6 +84,20 @@ function Notifications() {
     queryFn: () => api<{ items: Notification[]; unread: number }>('/notifications'),
     refetchInterval: 30_000,
   });
+  // Mirror new price-drop alerts as system notifications (Android), without replaying old ones.
+  useEffect(() => {
+    if (!data) return;
+    const KEY = 'kompare.lastNotifiedId';
+    let stored: string | null = null;
+    try { stored = localStorage.getItem(KEY); } catch { return; }
+    const maxId = Math.max(0, ...data.items.map((n) => n.id));
+    if (stored !== null) {
+      const fresh = data.items.filter((n) => n.id > Number(stored) && !n.read && n.title.startsWith('Price drop'));
+      showNotifications(fresh).catch(() => {});
+    }
+    if (stored === null || maxId > Number(stored)) try { localStorage.setItem(KEY, String(maxId)); } catch { /* ignore */ }
+  }, [data]);
+
   const markRead = useMutation({
     mutationFn: () => api('/notifications/read', { method: 'POST' }),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['notifications'] }),
@@ -131,6 +149,7 @@ export function Header() {
               {menu && (
                 <div className="menu">
                   <div className="menu-head">{user.name}<div className="xs muted">{user.email}</div>{cloud && <div className="xs ok">☁️ Backed up to your Google account</div>}</div>
+                  <Link to="/account" className="menu-item">👤 Account</Link>
                   <Link to="/orders" className="menu-item">📦 Orders</Link>
                   <Link to="/watchlist" className="menu-item">👀 Watchlist & alerts</Link>
                   <button className="menu-item" onMouseDown={(e) => e.preventDefault()} onClick={() => { setMenu(false); logout(); }}>↩ Sign out</button>

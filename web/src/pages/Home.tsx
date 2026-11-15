@@ -3,8 +3,10 @@ import { useQuery } from '@tanstack/react-query';
 import { api, type Summary } from '../lib/api';
 import { useMeta, useTitle } from '../lib/hooks';
 import { SearchBox } from '../components/Header';
-import { ErrorBox, Grid, PlatformBadge } from '../components/ui';
+import { ErrorBox, Grid, PlatformBadge, ProductCard } from '../components/ui';
 import { ago } from '../lib/format';
+import { recentlyViewed } from '../lib/recent';
+import { api as apiCall, qs } from '../lib/api';
 
 const until = (ts: number) => { const h = Math.max(0, (ts - Date.now()) / 3_600_000); return h >= 1 ? `${Math.round(h)}h` : `${Math.max(1, Math.round(h * 60))}m`; };
 
@@ -15,6 +17,12 @@ export default function Home() {
   useTitle('');
   const { categories, list } = useMeta();
   const deals = useDeals();
+  const viewed = recentlyViewed.list();
+  const recent = useQuery({
+    queryKey: ['products', { slugs: viewed.join(',') }],
+    queryFn: () => apiCall<{ items: Summary[] }>(`/products${qs({ slugs: viewed.join(',') })}`),
+    enabled: viewed.length > 0,
+  });
   return (
     <>
       <section className="hero">
@@ -34,6 +42,13 @@ export default function Home() {
           ))}
         </div>
       </section>
+
+      {!!recent.data?.items.length && (
+        <section>
+          <h2 className="section-title">👀 Recently viewed</h2>
+          <div className="hscroll">{recent.data.items.map((p) => <div key={p.id} className="hscroll-item"><ProductCard p={p} /></div>)}</div>
+        </section>
+      )}
 
       {deals.isError ? <ErrorBox error={deals.error} retry={deals.refetch} /> : (
         <>

@@ -4,6 +4,8 @@ import { api, qs, type Summary } from '../lib/api';
 import { useMeta, useTitle } from '../lib/hooks';
 import { Empty, ErrorBox, Grid } from '../components/ui';
 import { SearchBox } from '../components/Header';
+import { recentSearches } from '../lib/recent';
+import { useState } from 'react';
 
 const SORTS = [
   ['relevance', 'Relevance'], ['trending', 'Trending'], ['popular', 'Best selling'], ['price_asc', 'Price: low to high'], ['price_desc', 'Price: high to low'],
@@ -55,6 +57,7 @@ export default function Search() {
       </aside>
       <section>
         <div className="tab-search"><SearchBox autoFocus={!f.q && !f.category && !f.sort} /></div>
+        {!f.q && !f.category && <RecentSearches onPick={(q) => set('q', q)} />}
         <div className="section-head">
           <div>
             <h1 className="section-title">{f.q ? <>Results for “{f.q}”</> : cat?.name || 'All products'}</h1>
@@ -75,6 +78,18 @@ export default function Search() {
           </div>
         )}
       </section>
+    </div>
+  );
+}
+
+function RecentSearches({ onPick }: { onPick: (q: string) => void }) {
+  const [items, setItems] = useState(recentSearches.list);
+  if (!items.length) return null;
+  return (
+    <div className="recent-searches">
+      <span className="xs muted">Recent</span>
+      {items.map((q) => <button key={q} className="chip" onClick={() => onPick(q)}>🕘 {q}</button>)}
+      <button className="link xs" onClick={() => { recentSearches.clear(); setItems([]); }}>Clear</button>
     </div>
   );
 }

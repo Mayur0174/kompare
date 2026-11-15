@@ -1,6 +1,10 @@
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 import path from 'node:path';
+import { readFileSync } from 'node:fs';
+
+const pkg = JSON.parse(readFileSync(path.resolve(__dirname, '../package.json'), 'utf8'));
+const appVersion = `${pkg.version}${process.env.GITHUB_RUN_NUMBER ? `.${process.env.GITHUB_RUN_NUMBER}` : ''}`;
 
 export default defineConfig(({ mode }) => {
   // `--mode mobile` builds the self-contained Android/iOS app: the backend (server/*) runs on the
@@ -23,7 +27,10 @@ export default defineConfig(({ mode }) => {
     root: path.resolve(__dirname),
     plugins: [react()],
     resolve: { alias },
-    define: mobile ? { 'import.meta.env.VITE_LOCAL_API': JSON.stringify('1'), 'process.env': 'globalThis.__kompareEnv', 'process.argv': '[]' } : {},
+    define: {
+      'import.meta.env.VITE_APP_VERSION': JSON.stringify(appVersion),
+      ...(mobile ? { 'import.meta.env.VITE_LOCAL_API': JSON.stringify('1'), 'process.env': 'globalThis.__kompareEnv', 'process.argv': '[]' } : {}),
+    },
     build: {
       outDir: path.resolve(__dirname, '../dist'),
       emptyOutDir: true,

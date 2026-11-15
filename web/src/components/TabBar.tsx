@@ -11,7 +11,7 @@ export function TabBar() {
     { to: '/search', label: 'Search', icon: '🔍' },
     { to: '/deals', label: 'Deals', icon: '🔥' },
     { to: '/cart', label: 'Cart', icon: '🛒', badge: cart?.count },
-    { to: user ? '/orders' : '/login', label: user ? 'Orders' : 'Account', icon: user ? '📦' : '👤' },
+    { to: user ? '/account' : '/login', label: 'Account', icon: '👤' },
   ];
   return (
     <nav className="tabbar" aria-label="Primary">

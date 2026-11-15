@@ -27,10 +27,13 @@ export class DatabaseSync {
       all(...p) { const s = stmt(); s.bind(p); const rows = []; while (s.step()) rows.push(s.getAsObject()); s.reset(); return rows; },
       run(...p) {
         const s = stmt(); s.bind(p); s.step(); s.reset();
-        const changes = self.db.getRowsModified();
-        const lastInsertRowid = self.rowid();
         self.dirty();
-        return { changes, lastInsertRowid };
+        // Computed lazily: bulk inserts (seeding ~37k rows) never read them.
+        let changes, id;
+        return {
+          get changes() { return changes ??= self.db.getRowsModified(); },
+          get lastInsertRowid() { return id ??= self.rowid(); },
+        };
       },
     };
   }
