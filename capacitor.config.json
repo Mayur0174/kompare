@@ -1,0 +1,8 @@
+{
+  "appId": "app.kompare.mobile",
+  "appName": "Kompare",
+  "webDir": "dist",
+  "backgroundColor": "#f6f7fb",
+  "android": { "allowMixedContent": false },
+  "server": { "androidScheme": "https" }
+}

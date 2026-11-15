@@ -1,0 +1,9 @@
+node_modules
+dist
+data/
+.env
+*.log
+*.png
+!web/public/**/*.png
+android/
+ios/
