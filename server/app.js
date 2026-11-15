@@ -9,6 +9,7 @@ import { getProvider } from './providers/index.js';
 import { HttpError, DAY, HOUR } from './util.js';
 import { CATEGORIES } from './catalog.js';
 import { config } from './config.js';
+import { verifyFirebaseIdToken } from './firebaseVerify.js';
 
 // ---------- helpers ----------
 const wrap = (fn) => (req, res, next) => { try { const out = fn(req, res); if (out !== undefined) res.json(out); } catch (e) { next(e); } };
@@ -376,6 +377,106 @@ export function createApp(db, { log = console } = {}) {
     const u = q('SELECT * FROM users WHERE id=?').get(req.userId);
     if (!u) throw new HttpError(401, 'Session expired');
     return { user: userView(u) };
+  }));
+
+  // ---------- Google sign-in (Firebase Auth) ----------
+  // Links the Google identity to a local account (matched by Google uid, then by email) and returns our token.
+  function googleLogin(identity) {
+    let u = q('SELECT * FROM users WHERE google_uid = ?').get(identity.uid) || q('SELECT * FROM users WHERE email = ?').get(identity.email.toLowerCase());
+    if (u && !u.google_uid) q('UPDATE users SET google_uid = ? WHERE id = ?').run(identity.uid, u.id);
+    if (!u) {
+      const { lastInsertRowid } = q('INSERT INTO users (email,name,password_hash,google_uid,created_at) VALUES (?,?,?,?,?)')
+        .run(identity.email.toLowerCase(), identity.name.slice(0, 60), 'google', identity.uid, Date.now());
+      u = { id: Number(lastInsertRowid) };
+    }
+    u = q('SELECT * FROM users WHERE id = ?').get(u.id);
+    return { token: signToken(u.id), user: userView(u) };
+  }
+  const GoogleSchema = z.object({
+    idToken: z.string().min(10),
+    uid: z.string().min(1).max(128).optional(),
+    email: z.string().email().optional(),
+    name: z.string().max(120).nullish(),
+  });
+  app.post('/api/auth/google', authLimiter, (req, res, next) => {
+    try {
+      const b = parse(GoogleSchema, req.body);
+      if (config.trustDeviceIdentity) {
+        // On-device build: the phone's Google sign-in already authenticated this user locally.
+        if (!b.uid || !b.email) throw new HttpError(400, 'Missing Google account details');
+        return res.json(googleLogin({ uid: b.uid, email: b.email, name: b.name || b.email.split('@')[0] }));
+      }
+      if (!config.firebaseProjectId) throw new HttpError(501, 'Google sign-in is not configured on this server');
+      verifyFirebaseIdToken(b.idToken, config.firebaseProjectId).then((id) => res.json(googleLogin(id))).catch(next);
+    } catch (e) { next(e); }
+  });
+
+  // ---------- cloud backup: export / import a user's data ----------
+  app.get('/api/sync/export', requireAuth, wrap((req) => {
+    const uid = req.userId;
+    const u = q('SELECT name, address FROM users WHERE id=?').get(uid);
+    const orders = q('SELECT * FROM orders WHERE user_id=? ORDER BY created_at').all(uid).map((o) => ({
+      subtotal: o.subtotal, shipping: o.shipping, total: o.total, savings: o.savings, payment_method: o.payment_method, address: o.address,
+      idempotency_key: o.idempotency_key, cancelled_at: o.cancelled_at, created_at: o.created_at,
+      items: q(`SELECT i.*, l.url FROM order_items i JOIN listings l ON l.id=i.listing_id WHERE i.order_id=?`).all(o.id).map((i) => ({
+        url: i.url, platform_id: i.platform_id, title: i.title, unit_price: i.unit_price, mrp: i.mrp, qty: i.qty, platform_order_ref: i.platform_order_ref, eta: i.eta,
+      })),
+    }));
+    return {
+      version: 1,
+      exportedAt: Date.now(),
+      profile: { name: u.name, address: u.address },
+      watchlist: q('SELECT p.slug, w.created_at FROM watchlist w JOIN products p ON p.id=w.product_id WHERE w.user_id=?').all(uid),
+      alerts: q('SELECT p.slug, a.target_price, a.active, a.triggered_at, a.created_at FROM alerts a JOIN products p ON p.id=a.product_id WHERE a.user_id=?').all(uid),
+      cart: q('SELECT l.url, c.qty, c.added_price, c.created_at FROM cart_items c JOIN listings l ON l.id=c.listing_id WHERE c.user_id=?').all(uid),
+      notifications: q('SELECT title, body, link, read, created_at FROM notifications WHERE user_id=? ORDER BY created_at DESC LIMIT 100').all(uid),
+      orders,
+    };
+  }));
+
+  const SnapshotSchema = z.object({
+    version: z.literal(1),
+    profile: z.object({ name: z.string().max(120), address: z.string().max(2000).nullable() }),
+    watchlist: z.array(z.object({ slug: z.string(), created_at: z.number() })).max(2000),
+    alerts: z.array(z.object({ slug: z.string(), target_price: z.number().int(), active: z.number(), triggered_at: z.number().nullable(), created_at: z.number() })).max(2000),
+    cart: z.array(z.object({ url: z.string(), qty: z.number().int().min(1).max(10), added_price: z.number().int(), created_at: z.number() })).max(200),
+    notifications: z.array(z.object({ title: z.string(), body: z.string(), link: z.string().nullable(), read: z.number(), created_at: z.number() })).max(500),
+    orders: z.array(z.object({
+      subtotal: z.number().int(), shipping: z.number().int(), total: z.number().int(), savings: z.number().int(), payment_method: z.string(), address: z.string(),
+      idempotency_key: z.string().nullable(), cancelled_at: z.number().nullable(), created_at: z.number(),
+      items: z.array(z.object({ url: z.string(), platform_id: z.string(), title: z.string(), unit_price: z.number().int(), mrp: z.number().int(), qty: z.number().int(), platform_order_ref: z.string(), eta: z.number() })),
+    })).max(1000),
+  }).passthrough();
+
+  // Replaces this user's data with a backup (the cloud copy is the source of truth on sign-in).
+  app.post('/api/sync/import', requireAuth, wrap((req) => {
+    const s = parse(SnapshotSchema, req.body?.snapshot);
+    const uid = req.userId;
+    const productId = new Map(q('SELECT id, slug FROM products').all().map((p) => [p.slug, p.id]));
+    const listing = new Map(q('SELECT id, url, product_id FROM listings').all().map((l) => [l.url, l]));
+    tx(db, () => {
+      for (const t of ['watchlist', 'alerts', 'cart_items', 'notifications', 'orders']) q(`DELETE FROM ${t} WHERE user_id=?`).run(uid);
+      q('UPDATE users SET name=?, address=? WHERE id=?').run(s.profile.name, s.profile.address, uid);
+      for (const w of s.watchlist) if (productId.has(w.slug)) q('INSERT OR IGNORE INTO watchlist (user_id,product_id,created_at) VALUES (?,?,?)').run(uid, productId.get(w.slug), w.created_at);
+      for (const a of s.alerts) if (productId.has(a.slug)) {
+        q('INSERT OR REPLACE INTO alerts (user_id,product_id,target_price,active,triggered_at,created_at) VALUES (?,?,?,?,?,?)').run(uid, productId.get(a.slug), a.target_price, a.active ? 1 : 0, a.triggered_at, a.created_at);
+      }
+      for (const c of s.cart) if (listing.has(c.url)) q('INSERT OR REPLACE INTO cart_items (user_id,listing_id,qty,added_price,created_at) VALUES (?,?,?,?,?)').run(uid, listing.get(c.url).id, c.qty, c.added_price, c.created_at);
+      for (const n of s.notifications) q('INSERT INTO notifications (user_id,title,body,link,read,created_at) VALUES (?,?,?,?,?,?)').run(uid, n.title, n.body, n.link, n.read ? 1 : 0, n.created_at);
+      for (const o of s.orders) {
+        const items = o.items.filter((i) => listing.has(i.url));
+        if (!items.length) continue;
+        const { lastInsertRowid } = q(`INSERT INTO orders (user_id,subtotal,shipping,total,savings,payment_method,address,idempotency_key,cancelled_at,created_at)
+          VALUES (?,?,?,?,?,?,?,?,?,?)`).run(uid, o.subtotal, o.shipping, o.total, o.savings, o.payment_method, o.address, o.idempotency_key, o.cancelled_at, o.created_at);
+        for (const i of items) {
+          const l = listing.get(i.url);
+          q(`INSERT INTO order_items (order_id,listing_id,product_id,platform_id,title,unit_price,mrp,qty,platform_order_ref,eta) VALUES (?,?,?,?,?,?,?,?,?,?)`)
+            .run(Number(lastInsertRowid), l.id, l.product_id, i.platform_id, i.title, i.unit_price, i.mrp, i.qty, i.platform_order_ref, i.eta);
+        }
+      }
+    });
+    dataVersion.v++;
+    return { ok: true };
   }));
 
   // ---------- watchlist ----------

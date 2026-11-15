@@ -1,6 +1,7 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { api, setUnauthorizedHandler, tokenStore, type Cart, type Category, type Platform, type User } from './api';
+import { api, setMutationListener, setUnauthorizedHandler, tokenStore, type Cart, type Category, type Platform, type User } from './api';
+import { currentGoogleUid, noteLocalChange, signOutGoogle, syncNow } from './cloud';
 
 // ---------- toasts ----------
 type Toast = { id: number; text: string; kind: 'ok' | 'err' };
@@ -25,15 +26,25 @@ export function ToastProvider({ children }: { children: ReactNode }) {
 export const useToast = () => useContext(ToastCtx);
 
 // ---------- auth ----------
-type AuthCtxT = { user: User | null; ready: boolean; login: (token: string, user: User) => void; logout: () => void };
-const AuthCtx = createContext<AuthCtxT>({ user: null, ready: false, login: () => {}, logout: () => {} });
+type AuthCtxT = { user: User | null; ready: boolean; cloud: boolean; login: (token: string, user: User) => void; logout: () => void };
+const AuthCtx = createContext<AuthCtxT>({ user: null, ready: false, cloud: false, login: () => {}, logout: () => {} });
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const qc = useQueryClient();
   const [user, setUser] = useState<User | null>(null);
   const [ready, setReady] = useState(!tokenStore.get());
 
+  const [cloud, setCloud] = useState(!!currentGoogleUid());
+
+  // Restore from / back up to the Google account, then refresh whatever is on screen.
+  const runSync = useCallback(() => {
+    if (!currentGoogleUid()) return;
+    syncNow().then((r) => { if (r === 'restored') qc.invalidateQueries(); }).catch((e) => console.warn('[cloud] sync failed', e));
+  }, [qc]);
+
   const logout = useCallback(() => {
+    signOutGoogle().catch(() => {});
+    setCloud(false);
     tokenStore.set(null);
     setUser(null);
     qc.removeQueries({ predicate: (q) => ['cart', 'watchlist', 'alerts', 'orders', 'order', 'notifications'].includes(String(q.queryKey[0])) });
@@ -42,17 +53,20 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     setUnauthorizedHandler(logout);
+    setMutationListener(noteLocalChange);
     if (!tokenStore.get()) return;
-    api<{ user: User }>('/auth/me').then((r) => setUser(r.user)).catch(() => tokenStore.set(null)).finally(() => setReady(true));
-  }, [logout]);
+    api<{ user: User }>('/auth/me').then((r) => { setUser(r.user); runSync(); }).catch(() => tokenStore.set(null)).finally(() => setReady(true));
+  }, [logout, runSync]);
 
   const login = useCallback((token: string, u: User) => {
     tokenStore.set(token);
     setUser(u);
+    setCloud(!!currentGoogleUid());
     qc.invalidateQueries();
-  }, [qc]);
+    runSync();
+  }, [qc, runSync]);
 
-  const value = useMemo(() => ({ user, ready, login, logout }), [user, ready, login, logout]);
+  const value = useMemo(() => ({ user, ready, cloud, login, logout }), [user, ready, cloud, login, logout]);
   return <AuthCtx.Provider value={value}>{children}</AuthCtx.Provider>;
 }
 export const useAuth = () => useContext(AuthCtx);

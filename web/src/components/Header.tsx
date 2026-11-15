@@ -112,7 +112,7 @@ function Notifications() {
 }
 
 export function Header() {
-  const { user, logout } = useAuth();
+  const { user, logout, cloud } = useAuth();
   const { data: cart } = useCart();
   const [menu, setMenu] = useState(false);
   return (
@@ -130,7 +130,7 @@ export function Header() {
               <button className="avatar" onClick={() => setMenu(!menu)} onBlur={() => setTimeout(() => setMenu(false), 150)} aria-label="Account menu">{user.name[0]?.toUpperCase()}</button>
               {menu && (
                 <div className="menu">
-                  <div className="menu-head">{user.name}<div className="xs muted">{user.email}</div></div>
+                  <div className="menu-head">{user.name}<div className="xs muted">{user.email}</div>{cloud && <div className="xs ok">☁️ Backed up to your Google account</div>}</div>
                   <Link to="/orders" className="menu-item">📦 Orders</Link>
                   <Link to="/watchlist" className="menu-item">👀 Watchlist & alerts</Link>
                   <button className="menu-item" onMouseDown={(e) => e.preventDefault()} onClick={() => { setMenu(false); logout(); }}>↩ Sign out</button>

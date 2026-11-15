@@ -2,7 +2,35 @@
 
 One app to compare a product's **live price, price history and delivery terms across Amazon, Flipkart, Myntra, AJIO, Croma, Reliance Digital, Tata CLiQ, Nykaa and Meesho**, and to **order from any of them in one checkout**.
 
-It ships as an installable mobile app (PWA, with offline support), can be wrapped as native Android / iOS apps with Capacitor, and also works as a website. Everything is free and open source. There are no paid services or API keys, and no database server to run.
+Kompare is an **Android app** (an `.apk` you install on the phone). The whole backend (catalogue, price engine, alerts, cart, orders) runs **on the phone** with an on-device SQLite database, so it needs no server and works offline. Signing in with Google backs your data up to your own free Firebase project, so it comes back after a reinstall or on a new phone. The same code also runs as a website with a Node server. Everything used is free and open source.
+
+## Get the Android app
+
+1. Open the repository on GitHub → **Actions** → **Android app** → the latest green run.
+2. Under **Artifacts**, download **Kompare-android-apk** (a zip containing `Kompare.apk`).
+3. On the phone, open `Kompare.apk` and allow "Install unknown apps" when Android asks.
+
+Every push builds a new APK automatically (`.github/workflows/android.yml`). To build one on your own computer you need Android Studio, then run `npm run android:apk` (or `npm run android:open` to open the project in Android Studio).
+
+## Google sign-in + cloud backup (free)
+
+Signing out and back in on the same phone already keeps all your data: it stays in the on-device database. Google sign-in adds a **cloud backup**: the watchlist, alerts, cart, orders and address are saved to Firestore under `users/{your uid}`. Signing in again, on this phone or a new one, restores everything. Changes are backed up automatically about 1.5 s after each edit.
+
+One-time setup, about 10 minutes, on Firebase's free Spark plan:
+
+1. Go to [console.firebase.google.com](https://console.firebase.google.com) → **Add project**.
+2. **Authentication** → Sign-in method → enable **Google**. Copy the **Web client ID** shown under "Web SDK configuration".
+3. **Firestore Database** → Create database. Then **Rules** → paste the contents of `firestore.rules` → Publish.
+4. **Project settings** → Your apps → add a **Web app** and copy its config (`apiKey`, `authDomain`, `projectId`, `appId`).
+5. Still in Project settings, add an **Android app** with package name `app.kompare.mobile`. Add the **SHA-1** of your signing key: run `scripts/make-keystore.sh`, which creates the key and prints its SHA-1.
+6. GitHub → Settings → Secrets and variables → Actions. Add these repository secrets:
+   `FIREBASE_API_KEY`, `FIREBASE_AUTH_DOMAIN`, `FIREBASE_PROJECT_ID`, `FIREBASE_APP_ID`, `GOOGLE_WEB_CLIENT_ID`,
+   and the 4 signing secrets printed by the script (`ANDROID_KEYSTORE_BASE64`, `ANDROID_KEYSTORE_PASSWORD`, `ANDROID_KEY_ALIAS`, `ANDROID_KEY_PASSWORD`).
+7. Push any commit, or click **Run workflow**. The new APK has a working **Continue with Google** button.
+
+For local builds, copy `web/.env.example` to `web/.env` and fill in the same values. **All `.env` files, keystores and `google-services.json` are git-ignored.** Note that the Firebase web config is compiled into the app, which is normal for Firebase. The data stays protected because the Firestore rules only let each user read and write their own document. For the website/server mode, also set `FIREBASE_PROJECT_ID` so the server can verify Google ID tokens.
+
+iOS: the same project builds for iPhone with `npm run ios:open`. This needs a Mac with Xcode, and distributing through the App Store needs a paid Apple developer account.
 
 ## Features
 
@@ -17,7 +45,7 @@ It ships as an installable mobile app (PWA, with offline support), can be wrappe
 - **Accounts**: scrypt password hashing, HMAC-signed tokens, rate-limited login. Demo account: `demo@kompare.app` / `demo1234`.
 - **Mobile app shell**: bottom tab bar, safe-area insets, bottom-sheet pop-ups, install banner, service worker (app shell plus offline catalogue), manifest with maskable icons, dark mode, reduced-motion support.
 
-## Running it
+## Running the website / server version
 
 Requires Node.js 22.13 or newer.
 
@@ -30,16 +58,7 @@ npm test             # API test suite
 npm run seed         # reset the demo database
 ```
 
-On a phone, open the site and choose **Install / Add to Home Screen**.
-
-### Native Android / iOS (Capacitor)
-
-```bash
-VITE_API_BASE=https://your-api.example.com npm run android   # opens Android Studio → Run / Build APK
-VITE_API_BASE=https://your-api.example.com npm run ios       # macOS + Xcode
-```
-
-The native app bundles the UI locally and talks to your deployed API. CORS already allows the Capacitor origins; add more with `CORS_ORIGINS`.
+`npm run preview:app` serves the Android app's build in a browser, with the on-device backend and no server, which is handy for quick testing.
 
 ### Docker
 
@@ -57,7 +76,9 @@ docker build -t kompare . && docker run -p 8787:8787 -e JWT_SECRET=change-me -v 
 | `REFRESH_INTERVAL_MS` | `60000` | How often store prices are polled (`0` disables) |
 | `FEED_REFRESH_MS` | `43200000` (12h) | How often the trending / best-seller catalogue is recomputed |
 | `CORS_ORIGINS` | – | Extra allowed origins (comma-separated) |
-| `VITE_API_BASE` | – | API URL baked into native builds |
+| `FIREBASE_PROJECT_ID` | – | Enables Google sign-in on the server (verifies Firebase ID tokens) |
+| `VITE_FIREBASE_*`, `VITE_GOOGLE_WEB_CLIENT_ID` | – | Google sign-in + cloud backup in the app (`web/.env`, or GitHub Secrets) |
+| `VITE_API_BASE` | – | Optional: make the app talk to a remote server instead of its on-device backend |
 
 ## Architecture
 
@@ -68,7 +89,11 @@ server/
   priceEngine.js    Polls providers, records hourly price history, fires alerts
   providers/        One adapter per store: fetchOffer() + placeOrder()
   seed.js           Demo catalogue: 56 products, 6 months of history
+  firebaseVerify.js Verifies Google/Firebase ID tokens (Web Crypto)
 web/src/            React + TanStack Query, routes split into lazy chunks, SVG chart with no chart library
+web/src/local/      On-device backend: runs server/* on SQLite-in-WebAssembly with small shims for Node-only modules
+web/src/lib/cloud.ts  Google sign-in + Firestore backup/restore
+android/            Native Android project (Capacitor)
 test/               node:test API suite
 ```
 

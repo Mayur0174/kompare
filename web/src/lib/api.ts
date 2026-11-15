@@ -57,7 +57,17 @@ export const setUnauthorizedHandler = (fn: () => void) => { onUnauthorized = fn;
 const API_BASE = (import.meta.env.VITE_API_BASE || '').replace(/\/$/, '');
 export const LOCAL = import.meta.env.VITE_LOCAL_API === '1';
 
-export async function api<T>(path: string, opts: { method?: string; body?: unknown; signal?: AbortSignal } = {}): Promise<T> {
+let onMutation: () => void = () => {};
+/** Notified after every successful write (used for automatic cloud backup). */
+export const setMutationListener = (fn: () => void) => { onMutation = fn; };
+
+export async function api<T>(path: string, opts: { method?: string; body?: unknown; signal?: AbortSignal; silent?: boolean } = {}): Promise<T> {
+  const data = await request<T>(path, opts);
+  if (!opts.silent && opts.method && opts.method !== 'GET' && !path.startsWith('/auth/')) onMutation();
+  return data;
+}
+
+async function request<T>(path: string, opts: { method?: string; body?: unknown; signal?: AbortSignal }): Promise<T> {
   const token = tokenStore.get();
   if (LOCAL) {
     // Mobile app: the backend runs on the device, no network round-trip.

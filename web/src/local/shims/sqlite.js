@@ -46,7 +46,7 @@ export class DatabaseSync {
   /** Debounced persistence: snapshot the whole DB to device storage shortly after writes. */
   dirty() {
     if (!globalThis.__kompareSave || this.saveTimer) return;
-    this.saveTimer = setTimeout(() => this.flush(), 2500);
+    this.saveTimer = setTimeout(() => this.flush(), 400);
   }
 
   flush() {

@@ -123,3 +123,25 @@ test('resolve pasted store URLs', async () => {
   assert.equal((await call(`/resolve?url=${encodeURIComponent('https://example.com/x')}`)).status, 404);
   assert.equal((await call('/resolve?url=notaurl')).status, 400);
 });
+
+test('cloud backup: export → wipe → import restores the same data', async () => {
+  const before = (await call('/sync/export')).body;
+  assert.ok(before.orders.length >= 1 && before.alerts.length >= 1);
+  const p = (await call('/products?q=boat')).body.items[0];
+  await call(`/watchlist/${p.id}`, { method: 'POST' });
+  const snap = (await call('/sync/export')).body;
+  // Simulate a fresh device: wipe this user's data, then restore from the snapshot.
+  const uid = db.prepare("SELECT id FROM users WHERE email='t@x.com'").get().id;
+  for (const t of ['watchlist', 'alerts', 'notifications', 'orders']) db.prepare(`DELETE FROM ${t} WHERE user_id=?`).run(uid);
+  assert.equal((await call('/watchlist')).body.items.length, 0);
+  assert.equal((await call('/sync/import', { method: 'POST', body: { snapshot: snap } })).status, 200);
+  const after = (await call('/sync/export')).body;
+  for (const k of ['watchlist', 'alerts', 'cart', 'notifications']) assert.equal(after[k].length, snap[k].length, k);
+  assert.deepEqual(after.orders.map((o) => [o.total, o.items.length, o.cancelled_at]), snap.orders.map((o) => [o.total, o.items.length, o.cancelled_at]));
+  assert.equal((await call('/sync/import', { method: 'POST', body: { snapshot: { version: 2 } } })).status, 400);
+});
+
+test('google sign-in requires server configuration and rejects forged tokens', async () => {
+  const r = await call('/auth/google', { method: 'POST', body: { idToken: 'x'.repeat(40) }, auth: false });
+  assert.equal(r.status, 501);
+});

@@ -47,7 +47,7 @@ async function boot() {
   globalThis.__kompareSQL = SQL;
   globalThis.__kompareDbBytes = bytes;
   globalThis.__kompareSave = (data) => idbSet('db', data).catch((e) => console.error('[device-db] save failed', e));
-  globalThis.__kompareEnv = { NODE_ENV: 'production', JWT_SECRET: deviceSecret(), DB_FILE: ':memory:' };
+  globalThis.__kompareEnv = { NODE_ENV: 'production', JWT_SECRET: deviceSecret(), DB_FILE: ':memory:', TRUST_DEVICE_IDENTITY: '1' };
 
   // Imported after the environment is prepared (config.js reads it at import time).
   const [{ openDb }, { seed }, { createApp }, { startPriceEngine }, { config }] = await Promise.all([
@@ -69,6 +69,7 @@ async function boot() {
 
   // Persist immediately when the app is backgrounded.
   document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') db.flush(); });
+  window.addEventListener('pagehide', () => db.flush());
   return app;
 }
 
