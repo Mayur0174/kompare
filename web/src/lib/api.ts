@@ -55,9 +55,20 @@ let onUnauthorized: () => void = () => {};
 export const setUnauthorizedHandler = (fn: () => void) => { onUnauthorized = fn; };
 
 const API_BASE = (import.meta.env.VITE_API_BASE || '').replace(/\/$/, '');
+export const LOCAL = import.meta.env.VITE_LOCAL_API === '1';
 
 export async function api<T>(path: string, opts: { method?: string; body?: unknown; signal?: AbortSignal } = {}): Promise<T> {
   const token = tokenStore.get();
+  if (LOCAL) {
+    // Mobile app: the backend runs on the device, no network round-trip.
+    const { localApi } = await import('../local/backend.js');
+    const r = await localApi(path, { method: opts.method, body: opts.body, token });
+    if (r.status >= 400) {
+      if (r.status === 401 && token) onUnauthorized();
+      throw new ApiError(r.status, r.body.error || `Request failed (${r.status})`, r.body.details);
+    }
+    return r.body as T;
+  }
   const res = await fetch(`${API_BASE}/api${path}`, {
     method: opts.method || 'GET',
     signal: opts.signal,

@@ -3,6 +3,7 @@ import type { Listing } from '../lib/api';
 import { useAddToCart, useAuth, useMeta } from '../lib/hooks';
 import { money, ago } from '../lib/format';
 import { PlatformBadge } from './ui';
+import { modalNavOptions } from './QuickView';
 
 /** Side-by-side price list of one product across every platform, cheapest (incl. shipping) first. */
 export function OffersTable({ listings, compact, stats }: { listings: Listing[]; compact?: boolean; stats?: Record<string, { low: number }> }) {
@@ -14,7 +15,7 @@ export function OffersTable({ listings, compact, stats }: { listings: Listing[];
   const worst = Math.max(...listings.filter((l) => l.inStock).map((l) => l.effectivePrice));
 
   const addToCart = (l: Listing) => {
-    if (!user) return nav(`/login?next=${encodeURIComponent(location.pathname)}`);
+    if (!user) return nav(`/login?next=${encodeURIComponent(location.pathname)}`, modalNavOptions());
     add.mutate({ listingId: l.id });
   };
 

@@ -1,39 +1,21 @@
-import crypto from 'node:crypto';
 import { config } from './config.js';
 import { HttpError } from './util.js';
+import { b64uDecode, b64uEncode, hmacB64u, safeEqual } from './crypto.js';
 
-const b64u = (buf) => Buffer.from(buf).toString('base64url');
-const SCRYPT = { N: 16384, r: 8, p: 1 };
-
-export function hashPassword(pw) {
-  const salt = crypto.randomBytes(16);
-  const hash = crypto.scryptSync(pw, salt, 32, SCRYPT);
-  return `scrypt$${salt.toString('hex')}$${hash.toString('hex')}`;
-}
-
-export function verifyPassword(pw, stored) {
-  const [alg, saltHex, hashHex] = String(stored).split('$');
-  if (alg !== 'scrypt' || !saltHex || !hashHex) return false;
-  const expected = Buffer.from(hashHex, 'hex');
-  const actual = crypto.scryptSync(pw, Buffer.from(saltHex, 'hex'), expected.length, SCRYPT);
-  return crypto.timingSafeEqual(expected, actual);
-}
+export { hashPassword, verifyPassword } from './crypto.js';
 
 export function signToken(userId) {
-  const payload = b64u(JSON.stringify({ sub: userId, exp: Math.floor(Date.now() / 1000) + config.tokenTtlSec }));
-  const sig = b64u(crypto.createHmac('sha256', config.jwtSecret).update(payload).digest());
-  return `${payload}.${sig}`;
+  const payload = b64uEncode(JSON.stringify({ sub: userId, exp: Math.floor(Date.now() / 1000) + config.tokenTtlSec }));
+  return `${payload}.${hmacB64u(config.jwtSecret, payload)}`;
 }
 
 export function verifyToken(token) {
   if (typeof token !== 'string') return null;
   const [payload, sig] = token.split('.');
   if (!payload || !sig) return null;
-  const expected = crypto.createHmac('sha256', config.jwtSecret).update(payload).digest();
-  const given = Buffer.from(sig, 'base64url');
-  if (given.length !== expected.length || !crypto.timingSafeEqual(given, expected)) return null;
+  if (!safeEqual(sig, hmacB64u(config.jwtSecret, payload))) return null;
   try {
-    const data = JSON.parse(Buffer.from(payload, 'base64url').toString());
+    const data = JSON.parse(b64uDecode(payload));
     if (!data.exp || data.exp < Date.now() / 1000) return null;
     return data.sub;
   } catch { return null; }

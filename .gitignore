@@ -2,8 +2,10 @@ node_modules
 dist
 data/
 .env
+.env.*
+!.env.example
 *.log
-*.png
-!web/public/**/*.png
-android/
-ios/
+/*.png
+android/app/src/main/assets/public/
+android/app/src/main/assets/capacitor.config.json
+android/app/src/main/assets/capacitor.plugins.json

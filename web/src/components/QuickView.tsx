@@ -1,5 +1,5 @@
 import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useLocation } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { api, type ProductDetail, type Summary } from '../lib/api';
 import { money } from '../lib/format';
@@ -15,13 +15,30 @@ export const productQuery = (slug: string) => ({
 });
 
 /** Pop-up showing a product's price on every platform, opened from any product card. */
+// The pop-up owns a history entry, so the Android / browser Back button closes it.
+const inModalEntry = () => (window.history.state as { kompareModal?: boolean } | null)?.kompareModal === true;
+/** Navigation from inside the pop-up replaces its history entry instead of stacking a new one. */
+export const modalNavOptions = () => ({ replace: inModalEntry() });
+
 export function QuickViewProvider({ children }: { children: ReactNode }) {
   const [item, setItem] = useState<Summary | null>(null);
-  const open = useCallback((p: Summary) => setItem(p), []);
+  const loc = useLocation();
+  useEffect(() => { setItem(null); }, [loc.pathname, loc.search]);
+  useEffect(() => {
+    if (!item) return;
+    const onPop = () => setItem(null);
+    window.addEventListener('popstate', onPop);
+    return () => window.removeEventListener('popstate', onPop);
+  }, [item]);
+  const open = useCallback((p: Summary) => {
+    if (!inModalEntry()) window.history.pushState({ ...window.history.state, kompareModal: true }, '');
+    setItem(p);
+  }, []);
+  const close = useCallback(() => { if (inModalEntry()) window.history.back(); else setItem(null); }, []);
   return (
     <Ctx.Provider value={open}>
       {children}
-      {item && <QuickView item={item} onClose={() => setItem(null)} />}
+      {item && <QuickView item={item} onClose={close} />}
     </Ctx.Provider>
   );
 }
@@ -63,7 +80,7 @@ function QuickView({ item, onClose }: { item: Summary; onClose: () => void }) {
             <OffersTable listings={data.listings} compact stats={data.stats} />
             <div className="qv-foot">
               <span className="xs muted">6-month low {money(data.overall.low)} · avg {money(data.overall.avg)}</span>
-              <Link to={`/p/${item.slug}`} className="btn" onClick={onClose}>Price history & details →</Link>
+              <Link to={`/p/${item.slug}`} replace={inModalEntry()} className="btn">Price history & details →</Link>
             </div>
           </>
         )}

@@ -160,7 +160,15 @@ export function openDb(file = config.dbFile) {
   if (file !== ':memory:') fs.mkdirSync(path.dirname(file), { recursive: true });
   const db = new DatabaseSync(file);
   db.exec(SCHEMA);
+  migrate(db);
   return db;
+}
+
+/** Additive, idempotent migrations for databases created by older versions. */
+function migrate(db) {
+  const cols = new Set(db.prepare('PRAGMA table_info(users)').all().map((c) => c.name));
+  if (!cols.has('google_uid')) db.exec('ALTER TABLE users ADD COLUMN google_uid TEXT');
+  db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_users_google ON users(google_uid) WHERE google_uid IS NOT NULL');
 }
 
 /** Run fn inside a transaction (sync). Rolls back on throw. */

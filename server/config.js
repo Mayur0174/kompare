@@ -1,6 +1,5 @@
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import crypto from 'node:crypto';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -16,11 +15,15 @@ export const config = {
   isProd,
   port: Number(process.env.PORT) || 8787,
   dbFile: process.env.DB_FILE || path.join(root, 'data', 'kompare.db'),
-  jwtSecret: secret || crypto.randomBytes(32).toString('hex'),
+  jwtSecret: secret || [...globalThis.crypto.getRandomValues(new Uint8Array(32))].map((b) => b.toString(16).padStart(2, '0')).join(''),
   tokenTtlSec: 60 * 60 * 24 * 7,
   // How often the price engine polls platforms (ms). 0 disables.
   refreshIntervalMs: process.env.REFRESH_INTERVAL_MS !== undefined ? Number(process.env.REFRESH_INTERVAL_MS) : 60_000,
   // Home-page trending / best-seller catalogue is recomputed this often (default 12h).
   feedRefreshMs: Number(process.env.FEED_REFRESH_MS) || 12 * 60 * 60 * 1000,
+  // Google sign-in (Firebase Auth). The server verifies Firebase ID tokens for this project.
+  firebaseProjectId: process.env.FIREBASE_PROJECT_ID || '',
+  // On-device build only: the identity comes from the device's own Google sign-in.
+  trustDeviceIdentity: process.env.TRUST_DEVICE_IDENTITY === '1',
   webDist: path.join(root, 'dist'),
 };

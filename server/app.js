@@ -20,7 +20,7 @@ const parse = (schema, data) => {
 
 function rateLimit({ windowMs, max }) {
   const hits = new Map();
-  setInterval(() => hits.clear(), windowMs).unref();
+  setInterval(() => hits.clear(), windowMs).unref?.();
   return (req, _res, next) => {
     const key = req.ip;
     const n = (hits.get(key) || 0) + 1;

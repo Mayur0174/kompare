@@ -10,7 +10,6 @@
  * provider for the platform id. Out of the box every platform uses the
  * SimulatedProvider so the app is fully functional without credentials.
  */
-import crypto from 'node:crypto';
 import { retailRound, clamp, DAY } from '../util.js';
 
 export class SimulatedProvider {
@@ -31,7 +30,7 @@ export class SimulatedProvider {
 
   placeOrder({ items }) {
     const prefix = this.platformId.slice(0, 3).toUpperCase();
-    const ref = `${prefix}-${Date.now().toString(36).toUpperCase()}-${crypto.randomBytes(3).toString('hex').toUpperCase()}`;
+    const ref = `${prefix}-${Date.now().toString(36).toUpperCase()}-${[...globalThis.crypto.getRandomValues(new Uint8Array(3))].map((b) => b.toString(16).padStart(2, '0')).join('').toUpperCase()}`;
     const maxDays = Math.max(...items.map((i) => i.delivery_days));
     return { ref, eta: Date.now() + maxDays * DAY };
   }

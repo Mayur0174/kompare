@@ -59,6 +59,6 @@ export function startPriceEngine(db, intervalMs, log = console) {
       if (r.changedProducts) log.info?.(`[prices] refreshed ${r.checked} listings, ${r.changedProducts} products changed`);
     } catch (e) { log.error?.('[prices] refresh failed', e); }
   }, intervalMs);
-  timer.unref();
+  timer.unref?.();
   return () => clearInterval(timer);
 }

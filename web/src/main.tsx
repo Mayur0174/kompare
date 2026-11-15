@@ -97,6 +97,6 @@ createRoot(document.getElementById('root')!).render(
 );
 
 // Offline support + installability (skipped inside native shells, which bundle the app).
-if ('serviceWorker' in navigator && import.meta.env.PROD && !import.meta.env.VITE_API_BASE) {
+if ('serviceWorker' in navigator && import.meta.env.PROD && !import.meta.env.VITE_API_BASE && import.meta.env.VITE_LOCAL_API !== '1') {
   window.addEventListener('load', () => { navigator.serviceWorker.register('/sw.js').catch(() => {}); });
 }
