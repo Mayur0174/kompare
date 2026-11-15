@@ -41,6 +41,8 @@ jobs:
       - name: Build app bundle (on-device backend)
         run: npm run build:app
         env:
+          # Live, real prices (free SerpApi key). Add it as a repository secret named SERPAPI_KEY.
+          VITE_SERPAPI_KEY: ${{ secrets.SERPAPI_KEY }}
           # Optional: enables Google sign-in + cloud backup. Add these as repository secrets.
           VITE_FIREBASE_API_KEY: ${{ secrets.FIREBASE_API_KEY }}
           VITE_FIREBASE_AUTH_DOMAIN: ${{ secrets.FIREBASE_AUTH_DOMAIN }}

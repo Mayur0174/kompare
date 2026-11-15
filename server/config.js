@@ -22,6 +22,8 @@ export const config = {
   // Home-page trending / best-seller catalogue is recomputed this often (default 12h).
   feedRefreshMs: Number(process.env.FEED_REFRESH_MS) || 12 * 60 * 60 * 1000,
   // Google sign-in (Firebase Auth). The server verifies Firebase ID tokens for this project.
+  // Live, real prices (Google Shopping via SerpApi, free plan). Server mode only; the app has its own key.
+  serpApiKey: process.env.SERPAPI_KEY || '',
   firebaseProjectId: process.env.FIREBASE_PROJECT_ID || '',
   // On-device build only: the identity comes from the device's own Google sign-in.
   trustDeviceIdentity: process.env.TRUST_DEVICE_IDENTITY === '1',

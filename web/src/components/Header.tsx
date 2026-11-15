@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { Link, NavLink, useNavigate, useSearchParams } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api, qs, type Notification } from '../lib/api';
-import { useAuth, useCart, useDebounced, useToast } from '../lib/hooks';
+import { useAuth, useDebounced, useToast } from '../lib/hooks';
 import { money, ago } from '../lib/format';
 import { recentSearches } from '../lib/recent';
 import { showNotifications } from '../lib/native';
@@ -39,7 +39,12 @@ export function SearchBox({ autoFocus, big }: { autoFocus?: boolean; big?: boole
       try {
         const r = await api<{ slug: string }>(`/resolve${qs({ url: t })}`);
         nav(`/p/${r.slug}`);
-      } catch (err) { toast((err as Error).message, 'err'); }
+      } catch {
+        // Not tracked yet: search live for the product named in the link.
+        let words = '';
+        try { words = decodeURIComponent(new URL(t).pathname).split(/[/\-_+]+/).filter((w) => /[a-z]/i.test(w) && w.length > 2 && !/^(dp|p|gp|product|itm|buy)$/i.test(w)).slice(0, 8).join(' '); } catch { /* invalid URL */ }
+        if (words) nav(`/search${qs({ q: words })}`); else toast("Couldn't read that link. Try typing the product name.", 'err');
+      }
       return;
     }
     if (t) recentSearches.add(t);
@@ -131,7 +136,6 @@ function Notifications() {
 
 export function Header() {
   const { user, logout, cloud } = useAuth();
-  const { data: cart } = useCart();
   const [menu, setMenu] = useState(false);
   return (
     <header className="header">
@@ -139,10 +143,8 @@ export function Header() {
         <Link to="/" className="logo" aria-label="Kompare home"><span className="logo-mark">K</span><span className="logo-text">Kompare</span></Link>
         <div className="header-search"><SearchBox /></div>
         <nav className="header-nav">
-          <NavLink to="/deals" className="nav-link hide-sm">Deals</NavLink>
           {user && <NavLink to="/watchlist" className="nav-link hide-sm">Watchlist</NavLink>}
           {user && <Notifications />}
-          <NavLink to="/cart" className="icon-btn" aria-label={`Cart (${cart?.count || 0} items)`}>🛒{!!cart?.count && <span className="dot">{cart.count}</span>}</NavLink>
           {user ? (
             <div className="dropdown">
               <button className="avatar" onClick={() => setMenu(!menu)} onBlur={() => setTimeout(() => setMenu(false), 150)} aria-label="Account menu">{user.name[0]?.toUpperCase()}</button>
@@ -150,7 +152,6 @@ export function Header() {
                 <div className="menu">
                   <div className="menu-head">{user.name}<div className="xs muted">{user.email}</div>{cloud && <div className="xs ok">☁️ Backed up to your Google account</div>}</div>
                   <Link to="/account" className="menu-item">👤 Account</Link>
-                  <Link to="/orders" className="menu-item">📦 Orders</Link>
                   <Link to="/watchlist" className="menu-item">👀 Watchlist & alerts</Link>
                   <button className="menu-item" onMouseDown={(e) => e.preventDefault()} onClick={() => { setMenu(false); logout(); }}>↩ Sign out</button>
                 </div>

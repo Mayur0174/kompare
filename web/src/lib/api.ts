@@ -1,10 +1,10 @@
 export type Platform = {
   id: string; name: string; color: string; domain: string; shipping_fee: number; free_shipping_above: number;
-  return_days: number; cod: boolean; provider: string;
+  return_days: number; cod: boolean; searchUrl: string | null;
 };
-export type Category = { id: string; name: string; emoji: string; count: number };
+export type Category = { id: string; name: string; emoji: string; query: string; count: number };
 export type Summary = {
-  id: number; slug: string; title: string; brand: string; category: string; emoji: string; hue: number; rating: number;
+  id: number; slug: string; title: string; brand: string; category: string; emoji: string; hue: number; image: string | null; rating: number;
   reviewCount: number; mrp: number; bestPrice: number; maxPrice: number; bestPlatform: string | null; offers: number;
   inStock: boolean; discount: number; avg30: number; dropPct: number; spread: number; platforms: string[];
   sold30: number; views7: number; trendScore: number;
@@ -14,12 +14,12 @@ export type Listing = {
   stockQty: number; deliveryDays: number; rating: number; shipping: number; effectivePrice: number; returnDays: number; cod: boolean; updatedAt: number;
 };
 export type ProductDetail = {
-  product: { id: number; slug: string; title: string; brand: string; category: string; description: string; specs: Record<string, string>; emoji: string; hue: number; rating: number; reviewCount: number };
+  product: { id: number; slug: string; title: string; brand: string; category: string; description: string; specs: Record<string, string>; emoji: string; hue: number; image: string | null; rating: number; reviewCount: number };
   listings: Listing[];
   stats: Record<string, { low: number; high: number; avg: number }>;
   overall: { low: number; high: number; avg: number; lowAt: number };
   verdict: { level: 'great' | 'good' | 'wait'; text: string } | null;
-  similar: Summary[]; watching: boolean; alert: { id: number; targetPrice: number; active: boolean } | null;
+  similar: Summary[]; watching: boolean; alert: { id: number; targetPrice: number; active: boolean } | null; trackedSince: number | null;
 };
 export type History = { days: number; series: Record<string, [number, number][]> };
 export type Address = { name: string; phone: string; line1: string; city: string; state: string; pincode: string };

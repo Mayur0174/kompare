@@ -36,7 +36,7 @@ export default function Product() {
     if (q.error instanceof ApiError && q.error.status === 404) return <Empty title="Product not found" icon="🔍"><Link to="/" className="btn">Go home</Link></Empty>;
     return <ErrorBox error={q.error} retry={q.refetch} />;
   }
-  const { product: p, listings, overall, stats, verdict, similar, watching, alert } = q.data!;
+  const { product: p, listings, overall, stats, verdict, similar, watching, alert, trackedSince } = q.data!;
   const best = listings.find((l) => l.inStock);
   const requireUser = () => { if (!user) { nav(`/login?next=/p/${slug}`); return false; } return true; };
 
@@ -44,7 +44,7 @@ export default function Product() {
     <>
       <nav className="crumbs xs"><Link to="/">Home</Link> / <Link to={`/search?category=${p.category}`}>{p.category}</Link> / <span className="muted">{p.brand}</span></nav>
       <div className="product-top">
-        <Thumb emoji={p.emoji} hue={p.hue} size="lg" />
+        <Thumb emoji={p.emoji} hue={p.hue} image={p.image} size="lg" />
         <div className="product-info">
           <div className="muted">{p.brand}</div>
           <h1>{p.title}</h1>
@@ -54,7 +54,7 @@ export default function Product() {
           </div>
           {verdict && <div className={`verdict ${verdict.level}`}>{verdict.text}</div>}
           <div className="stat-row">
-            <div className="stat"><span className="xs muted">Lowest (6 mo)</span><b>{money(overall.low)}</b><span className="xs muted">{overall.lowAt ? date(overall.lowAt) : ''}</span></div>
+            <div className="stat"><span className="xs muted">Lowest tracked</span><b>{money(overall.low)}</b><span className="xs muted">{overall.lowAt ? date(overall.lowAt) : ''}</span></div>
             <div className="stat"><span className="xs muted">Average</span><b>{money(overall.avg)}</b></div>
             <div className="stat"><span className="xs muted">Highest</span><b>{money(overall.high)}</b></div>
           </div>
@@ -87,15 +87,11 @@ export default function Product() {
             {RANGES.map((r) => <button key={r} className={r === days ? 'on' : ''} onClick={() => setDays(r)}>{r === 180 ? '6M' : `${r}D`}</button>)}
           </div>
         </div>
+        {trackedSince && <p className="xs muted">Real prices recorded each time this product is checked, since {date(trackedSince)}. Watch it or set an alert to keep tracking.</p>}
         {hist.data ? <div style={{ opacity: hist.isFetching && hist.isPlaceholderData ? 0.5 : 1 }}><PriceChart data={hist.data} platforms={platforms} /></div> : <div className="skeleton" style={{ height: 280 }} />}
       </section>
 
-      <section className="two-col">
-        <div className="card pad-lg">
-          <h2 className="section-title sm">Specifications</h2>
-          <table className="specs"><tbody>{Object.entries(p.specs).map(([k, v]) => <tr key={k}><th>{k}</th><td>{v}</td></tr>)}</tbody></table>
-          <p className="muted sm">{p.description}</p>
-        </div>
+      <section>
         <div className="card pad-lg">
           <h2 className="section-title sm">Store-wise price range</h2>
           <table className="specs">

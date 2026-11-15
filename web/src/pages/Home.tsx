@@ -1,76 +1,68 @@
 import { Link } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
-import { api, type Summary } from '../lib/api';
-import { useMeta, useTitle } from '../lib/hooks';
-import { SearchBox } from '../components/Header';
-import { ErrorBox, Grid, PlatformBadge, ProductCard } from '../components/ui';
-import { ago } from '../lib/format';
+import { api, qs, type Summary } from '../lib/api';
+import { useAuth, useMeta, useTitle } from '../lib/hooks';
 import { recentlyViewed } from '../lib/recent';
-import { api as apiCall, qs } from '../lib/api';
-
-const until = (ts: number) => { const h = Math.max(0, (ts - Date.now()) / 3_600_000); return h >= 1 ? `${Math.round(h)}h` : `${Math.max(1, Math.round(h * 60))}m`; };
-
-type Deals = { drops: Summary[]; discounts: Summary[]; spreads: Summary[]; trending: Summary[]; bestsellers: Summary[]; feedUpdatedAt: number; feedNextUpdateAt: number };
-export const useDeals = () => useQuery({ queryKey: ['deals'], queryFn: () => api<Deals>('/deals'), refetchInterval: 60_000 });
+import { SearchBox } from '../components/Header';
+import { PlatformBadge, ProductCard } from '../components/ui';
 
 export default function Home() {
   useTitle('');
+  const { user } = useAuth();
   const { categories, list } = useMeta();
-  const deals = useDeals();
+  const known = list.filter((p) => p.searchUrl);
   const viewed = recentlyViewed.list();
   const recent = useQuery({
     queryKey: ['products', { slugs: viewed.join(',') }],
-    queryFn: () => apiCall<{ items: Summary[] }>(`/products${qs({ slugs: viewed.join(',') })}`),
+    queryFn: () => api<{ items: Summary[] }>(`/products${qs({ slugs: viewed.join(',') })}`),
     enabled: viewed.length > 0,
   });
+  const watch = useQuery({ queryKey: ['watchlist'], queryFn: () => api<{ items: Summary[] }>('/watchlist'), enabled: !!user });
+
   return (
     <>
       <section className="hero">
         <h1>Every store. One price check.</h1>
-        <p className="muted">Compare live prices, see 6-month price history and order from {list.length || 9} stores — without opening {list.length || 9} apps.</p>
+        <p className="muted">Search any product to compare live prices on {known.length || 9} stores, track its price and get alerts when it drops.</p>
         <SearchBox big />
-        <div className="platform-strip">{list.map((p) => <PlatformBadge key={p.id} id={p.id} />)}</div>
+        <div className="platform-strip">{known.map((p) => <PlatformBadge key={p.id} id={p.id} />)}</div>
       </section>
 
       <section>
         <h2 className="section-title">Shop by category</h2>
         <div className="cats">
           {categories.map((c) => (
-            <Link key={c.id} to={`/search?category=${c.id}`} className="cat card">
-              <span className="cat-emoji">{c.emoji}</span><span>{c.name}</span><span className="xs muted">{c.count} products</span>
+            <Link key={c.id} to={`/search${qs({ q: c.query })}`} className="cat card">
+              <span className="cat-emoji">{c.emoji}</span><span>{c.name}</span><span className="xs muted">Live prices</span>
             </Link>
           ))}
         </div>
       </section>
 
-      {!!recent.data?.items.length && (
-        <section>
-          <h2 className="section-title">👀 Recently viewed</h2>
-          <div className="hscroll">{recent.data.items.map((p) => <div key={p.id} className="hscroll-item"><ProductCard p={p} /></div>)}</div>
-        </section>
-      )}
+      {!!watch.data?.items.length && <Row title="🔔 Your price watch" to="/watchlist" items={watch.data.items} />}
+      {!!recent.data?.items.length && <Row title="👀 Recently viewed" items={recent.data.items} />}
 
-      {deals.isError ? <ErrorBox error={deals.error} retry={deals.refetch} /> : (
-        <>
-          {deals.data && <div className="feed-note xs muted">🕒 Trending & best-seller catalogue updated {ago(deals.data.feedUpdatedAt)} · next refresh in {until(deals.data.feedNextUpdateAt)} · prices are live</div>}
-          <Section title="📈 Trending now" sub="Most viewed, watched and bought across stores this week" to="/search?sort=trending" items={deals.data?.trending} loading={deals.isLoading} />
-          <Section title="🏆 Best sellers" sub="Most units sold in the last 30 days" to="/search?sort=popular" items={deals.data?.bestsellers} loading={deals.isLoading} />
-          <Section title="🔥 Biggest price drops" sub="Compared with each product's 30-day average" to="/search?sort=drop" items={deals.data?.drops} loading={deals.isLoading} />
-          <Section title="💸 Save the most by comparing" sub="Largest gap between the cheapest and costliest store" to="/search?sort=spread" items={deals.data?.spreads} loading={deals.isLoading} />
-        </>
-      )}
+      <section className="card pad-lg">
+        <h2 className="section-title sm">How Kompare works</h2>
+        <ol className="how">
+          <li><b>Search anything.</b> We fetch live listings from Amazon, Flipkart, Myntra, Croma, Reliance Digital, Tata CLiQ and more.</li>
+          <li><b>Compare.</b> The same product is grouped across stores, cheapest first, with real prices and links.</li>
+          <li><b>Track.</b> Save a product or set a target price. Every check is recorded, so you build a real price history.</li>
+          <li><b>Buy on the store.</b> “Buy” opens the store's own product page to complete your order.</li>
+        </ol>
+      </section>
     </>
   );
 }
 
-function Section({ title, sub, to, items, loading }: { title: string; sub?: string; to: string; items?: Summary[]; loading: boolean }) {
+function Row({ title, items, to }: { title: string; items: Summary[]; to?: string }) {
   return (
     <section>
       <div className="section-head">
-        <div><h2 className="section-title">{title}</h2>{sub && <div className="muted sm">{sub}</div>}</div>
-        <Link to={to} className="link">See all →</Link>
+        <h2 className="section-title">{title}</h2>
+        {to && <Link to={to} className="link">See all →</Link>}
       </div>
-      <Grid items={items} loading={loading} />
+      <div className="hscroll">{items.map((p) => <div key={p.id} className="hscroll-item"><ProductCard p={p} /></div>)}</div>
     </section>
   );
 }

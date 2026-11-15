@@ -21,7 +21,7 @@ export default function Watchlist() {
     <>
       <h1 className="section-title">Price alerts</h1>
       {alerts.isLoading ? <Spinner /> : !alerts.data?.items.length ? (
-        <p className="muted">No alerts yet. Open any product and tap “Set price alert” — we check prices continuously and notify you on a drop.</p>
+        <p className="muted">No alerts yet. Open any product and tap “Set price alert”. Real prices are re-checked when you open the app (about twice a day), and you're notified on a drop.</p>
       ) : (
         <div className="stack">
           {alerts.data.items.map((a) => {
@@ -29,7 +29,7 @@ export default function Watchlist() {
             return (
               <div key={a.id} className="card order-row">
                 <div className="row gap">
-                  <Thumb emoji={a.product.emoji} hue={a.product.hue} size="sm" />
+                  <Thumb emoji={a.product.emoji} hue={a.product.hue} image={a.product.image} size="sm" />
                   <div>
                     <Link to={`/p/${a.product.slug}`} className="cart-title">{a.product.title}</Link>
                     <div className="xs muted">Target {money(a.targetPrice)} · now {money(a.product.bestPrice)}{a.triggeredAt ? ` · triggered ${date(a.triggeredAt)}` : ''}</div>

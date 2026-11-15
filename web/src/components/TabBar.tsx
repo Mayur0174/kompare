@@ -1,16 +1,14 @@
 import { useEffect, useState } from 'react';
 import { NavLink } from 'react-router-dom';
-import { useAuth, useCart } from '../lib/hooks';
+import { useAuth } from '../lib/hooks';
 
 /** Native-style bottom navigation shown on phones / in the installed app. */
 export function TabBar() {
   const { user } = useAuth();
-  const { data: cart } = useCart();
   const tabs = [
     { to: '/', label: 'Home', icon: '🏠', end: true },
     { to: '/search', label: 'Search', icon: '🔍' },
-    { to: '/deals', label: 'Deals', icon: '🔥' },
-    { to: '/cart', label: 'Cart', icon: '🛒', badge: cart?.count },
+    { to: user ? '/watchlist' : '/login?next=%2Fwatchlist', label: 'Watchlist', icon: '🔔', badge: undefined as number | undefined },
     { to: user ? '/account' : '/login', label: 'Account', icon: '👤' },
   ];
   return (

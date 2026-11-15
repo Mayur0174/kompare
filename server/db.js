@@ -169,6 +169,14 @@ function migrate(db) {
   const cols = new Set(db.prepare('PRAGMA table_info(users)').all().map((c) => c.name));
   if (!cols.has('google_uid')) db.exec('ALTER TABLE users ADD COLUMN google_uid TEXT');
   db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_users_google ON users(google_uid) WHERE google_uid IS NOT NULL');
+  const pcols = new Set(db.prepare('PRAGMA table_info(products)').all().map((c) => c.name));
+  if (!pcols.has('image')) db.exec('ALTER TABLE products ADD COLUMN image TEXT');
+  if (!pcols.has('created_at')) db.exec('ALTER TABLE products ADD COLUMN created_at INTEGER');
+  // Remove the old generated demo catalogue (its links were not real store pages).
+  if (pcols.size && !pcols.has('image')) {
+    db.exec('DELETE FROM watchlist; DELETE FROM alerts; DELETE FROM cart_items; DELETE FROM order_items; DELETE FROM orders; DELETE FROM notifications; DELETE FROM price_history; DELETE FROM listings; DELETE FROM products; DELETE FROM feed_snapshots;');
+  }
+  db.exec(`CREATE TABLE IF NOT EXISTS live_queries (q TEXT PRIMARY KEY, product_ids TEXT NOT NULL, fetched_at INTEGER NOT NULL)`);
 }
 
 /** Run fn inside a transaction (sync). Rolls back on throw. */

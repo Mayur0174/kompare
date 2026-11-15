@@ -47,36 +47,21 @@ async function boot() {
   globalThis.__kompareSQL = SQL;
   globalThis.__kompareDbBytes = bytes;
   globalThis.__kompareSave = (data) => idbSet('db', data).catch((e) => console.error('[device-db] save failed', e));
-  globalThis.__kompareEnv = { NODE_ENV: 'production', JWT_SECRET: deviceSecret(), DB_FILE: ':memory:', TRUST_DEVICE_IDENTITY: '1', REFRESH_INTERVAL_MS: '120000' };
+  globalThis.__kompareEnv = { NODE_ENV: 'production', JWT_SECRET: deviceSecret(), DB_FILE: ':memory:', TRUST_DEVICE_IDENTITY: '1' };
 
   // Imported after the environment is prepared (config.js reads it at import time).
-  const [{ openDb }, { seed }, { createApp }, { startPriceEngine, refreshPrices }, { config }] = await Promise.all([
-    import('../../../server/db.js'), import('../../../server/seed.js'), import('../../../server/app.js'),
-    import('../../../server/priceEngine.js'), import('../../../server/config.js'),
+  const [{ openDb }, { seed }, { createApp }, { compactHistory }] = await Promise.all([
+    import('../../../server/db.js'), import('../../../server/seed.js'), import('../../../server/app.js'), import('../../../server/priceEngine.js'),
   ]);
   const db = openDb(':memory:');
-  if (seed(db)) db.flush();
+  seed(db);
+  compactHistory(db);
+  db.flush();
   const app = createApp(db, { log: console });
-  startPriceEngine(db, config.refreshIntervalMs);
-
-  // Trending / best-seller catalogue: recompute when the 12h snapshot is stale (checked at launch and hourly).
-  const refreshFeedIfStale = () => {
-    const row = db.prepare("SELECT computed_at FROM feed_snapshots WHERE id='home'").get();
-    if (!row || Date.now() - row.computed_at >= config.feedRefreshMs) app.locals.refreshHomeFeed();
-  };
-  refreshFeedIfStale();
-  setInterval(refreshFeedIfStale, 60 * 60 * 1000);
 
   // Persist immediately when the app is backgrounded.
   document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') db.flush(); });
   window.addEventListener('pagehide', () => db.flush());
-  // Catch up on prices after the app was in the background (timers are paused there).
-  let hiddenAt = 0;
-  document.addEventListener('visibilitychange', () => {
-    if (document.visibilityState === 'hidden') { hiddenAt = Date.now(); return; }
-    const away = hiddenAt ? Date.now() - hiddenAt : 0;
-    if (away > config.refreshIntervalMs) refreshPrices(db, { fraction: Math.min(1, 0.2 * (away / config.refreshIntervalMs)) });
-  });
   return app;
 }
 

@@ -1,20 +1,47 @@
 # Kompare
 
-One app to compare a product's **live price, price history and delivery terms across Amazon, Flipkart, Myntra, AJIO, Croma, Reliance Digital, Tata CLiQ, Nykaa and Meesho**, and to **order from any of them in one checkout**.
+Kompare is an **Android app** that compares a product's **live price across Amazon, Flipkart, Myntra, AJIO, Croma, Reliance Digital, Tata CLiQ, Nykaa, Meesho** and other Indian stores. It shows each store's real listing with a working link, records the product's price every time it's checked, and alerts you when it drops.
 
-Kompare is an **Android app** (an `.apk` you install on the phone). The whole backend (catalogue, price engine, alerts, cart, orders) runs **on the phone** with an on-device SQLite database, so it needs no server and works offline. Signing in with Google backs your data up to your own free Firebase project, so it comes back after a reinstall or on a new phone. The same code also runs as a website with a Node server. Everything used is free and open source.
+There are **no preloaded or made-up products**. Every product comes from a live search, and every "Buy" button opens the store's own product page, where the purchase is completed. Everything used is free and open source.
 
 ## Get the Android app
 
-1. Open the repository on GitHub → **Actions** → **Android app** → the latest green run.
-2. Under **Artifacts**, download **Kompare-android-apk** (a zip containing `Kompare.apk`).
-3. On the phone, open `Kompare.apk` and allow "Install unknown apps" when Android asks.
+On your Android phone, open
+**https://github.com/Mayur0174/kompare/releases/download/android-latest/Kompare.apk**,
+tap the downloaded file and allow "Install unknown apps". Every push to the repository builds a new APK and updates that link. If an older Kompare build is installed, uninstall it first; updates after this one install over the top.
 
-**Direct download (easiest):** open https://github.com/Mayur0174/kompare/releases/download/android-latest/Kompare.apk on the phone. Every push builds a new APK automatically and updates that link (`.github/workflows/android.yml`). To build one on your own computer you need Android Studio, then run `npm run android:apk` (or `npm run android:open` to open the project in Android Studio).
+## Live prices (free API key, 2 minutes)
+
+Amazon and Flipkart have no open price API, and scraping their sites breaks their terms and gets blocked. Kompare uses **Google Shopping results through SerpApi** instead: one search returns real products, prices, photos and store links from all the major Indian stores.
+
+1. Sign up at **https://serpapi.com** (free plan, about 100–250 searches a month) and copy your **API key**.
+2. GitHub → this repository → **Settings → Secrets and variables → Actions → New repository secret**: name `SERPAPI_KEY`, value = your key.
+3. Push any commit, or open **Actions → Android app → Run workflow**. The new APK has live prices.
+
+How the free quota is used:
+- Each search result is cached for 6 hours, so repeat searches cost nothing.
+- **↻ Refresh** fetches fresh prices.
+- Watched products are re-checked about twice a day when you open the app (at most 5), so price alerts can fire.
+
+Without a key, the app still works as a launcher: every search shows real search links for that product on each store.
+
+Note: the key is compiled into the APK, so anyone who unpacks the app could read it. That's acceptable for a personal free key. For a public release, run the server version below, which keeps the key on the server (`SERPAPI_KEY` in `.env`).
+
+## What the app does
+
+- **Search any product** across stores. The same product is grouped across stores, cheapest first, with real photos, ratings and links. Filter by store and sort by price.
+- **Quick-compare pop-up**: tap a product to see every store's price and a **Buy on <store>** button.
+- **Real price history**: every check is stored. The chart, the lowest-tracked price and the drop badges come from real checks, starting the first time you look at a product.
+- **Watchlist and price alerts**, with Android notifications. Tapping a notification opens the product.
+- **Paste a store link** (Amazon, Flipkart, …) into the search box to find that product.
+- **Accounts** on the phone, plus optional **Google sign-in with cloud backup** (below). Includes delete account.
+- Recently viewed, recent searches, native share sheet, dark mode, works offline for what you've already viewed.
+
+The app has no cart and no in-app checkout. Real orders can only be placed on the stores themselves.
 
 ## Google sign-in + cloud backup (free)
 
-Signing out and back in on the same phone already keeps all your data: it stays in the on-device database. Google sign-in adds a **cloud backup**: the watchlist, alerts, cart, orders and address are saved to Firestore under `users/{your uid}`. Signing in again, on this phone or a new one, restores everything. Changes are backed up automatically about 1.5 s after each edit.
+Signing out and back in on the same phone already keeps your data: it stays in the on-device database. Google sign-in adds a **cloud backup**: your watchlist and price alerts (with the products' store offers) are saved to Firestore under `users/{your uid}`. Signing in again, on this phone or a new one, restores everything. Changes are backed up automatically about 1.5 s after each edit.
 
 One-time setup, about 10 minutes, on Firebase's free Spark plan:
 
@@ -32,71 +59,48 @@ For local builds, copy `web/.env.example` to `web/.env` and fill in the same val
 
 iOS: the same project builds for iPhone with `npm run ios:open`. This needs a Mac with Xcode, and distributing through the App Store needs a paid Apple developer account.
 
-## Features
+iOS: the same project builds for iPhone with `npm run ios:open`. This needs a Mac with Xcode, and the App Store needs a paid Apple developer account.
 
-- **Universal search** with autocomplete, typo/plural tolerance, filters (category, store, price, stock) and 9 sort orders. Paste an Amazon / Flipkart / Myntra… product link to jump straight to its comparison.
-- **Quick-compare pop-up**: tap any product to see its price on every store that sells it, cheapest first, with delivery cost, ETA, stock, "lowest ever" badges and how much you save.
-- **Product page** with an interactive multi-store price-history chart (7D / 30D / 90D / 6M), the 6-month low / average / high, a store-wise price range, a "good time to buy?" verdict, specs and similar products.
-- **Home catalogue**: *Trending now* (views, watchlist adds, orders and price drops this week) and *Best sellers* (units sold in 30 days), mixed across categories. The list is a snapshot **recomputed every 12 hours** (`FEED_REFRESH_MS`) and stored in the database; prices on the cards stay live. Below that: price drops, the biggest gaps between stores, and a category browser.
-- **Price alerts and watchlist**: set a target price and get an in-app notification when any store drops to it.
-- **One cart, many stores**: free-delivery thresholds per store, "cheaper elsewhere" hints, and warnings when a price changed after you added the item.
-- **Checkout** splits the order into one sub-order per store. It is idempotent (a double tap cannot order twice), rejects a stale price or out-of-stock item, validates address and PIN code, and offers UPI / card / netbanking / COD (COD up to ₹50k).
-- **Orders**: per-store tracking numbers and ETAs, a status tracker, and cancellation (stock goes back).
-- **Accounts**: scrypt password hashing, HMAC-signed tokens, rate-limited login. Demo account: `demo@kompare.app` / `demo1234`.
-- **Mobile app shell**: bottom tab bar, safe-area insets, bottom-sheet pop-ups, install banner, service worker (app shell plus offline catalogue), manifest with maskable icons, dark mode, reduced-motion support.
-
-## Running the website / server version
+## Website / server version
 
 Requires Node.js 22.13 or newer.
 
 ```bash
 npm install
-npm run dev          # API on :8787 + Vite on :5173 (hot reload)
-# or production:
-npm run build && JWT_SECRET=change-me npm start   # http://localhost:8787
-npm test             # API test suite
-npm run seed         # reset the demo database
+cp .env.example .env    # set JWT_SECRET, SERPAPI_KEY (and FIREBASE_PROJECT_ID for Google sign-in)
+npm run build && npm start          # http://localhost:8787
+npm run dev                         # API :8787 + Vite :5173 with hot reload
+npm test                            # API tests
+npm run preview:app                 # the Android app's build in a browser (on-device backend)
 ```
 
-`npm run preview:app` serves the Android app's build in a browser, with the on-device backend and no server, which is handy for quick testing.
-
-### Docker
-
-```bash
-docker build -t kompare . && docker run -p 8787:8787 -e JWT_SECRET=change-me -v kompare-data:/app/data kompare
-```
+Docker: `docker build -t kompare . && docker run -p 8787:8787 --env-file .env -v kompare-data:/app/data kompare`
 
 ## Configuration
 
-| Variable | Default | Purpose |
+| Variable | Where | Purpose |
 |---|---|---|
-| `PORT` | `8787` | HTTP port |
-| `JWT_SECRET` | dev value / random | Token signing secret (**set it in production**) |
-| `DB_FILE` | `data/kompare.db` | SQLite file |
-| `REFRESH_INTERVAL_MS` | `60000` | How often store prices are polled (`0` disables) |
-| `FEED_REFRESH_MS` | `43200000` (12h) | How often the trending / best-seller catalogue is recomputed |
-| `CORS_ORIGINS` | – | Extra allowed origins (comma-separated) |
-| `FIREBASE_PROJECT_ID` | – | Enables Google sign-in on the server (verifies Firebase ID tokens) |
-| `VITE_FIREBASE_*`, `VITE_GOOGLE_WEB_CLIENT_ID` | – | Google sign-in + cloud backup in the app (`web/.env`, or GitHub Secrets) |
-| `VITE_API_BASE` | – | Optional: make the app talk to a remote server instead of its on-device backend |
+| `SERPAPI_KEY` | GitHub secret (app) / `.env` (server) | Live prices from Google Shopping |
+| `FIREBASE_*`, `GOOGLE_WEB_CLIENT_ID` | GitHub secrets / `web/.env` | Google sign-in + cloud backup |
+| `ANDROID_KEYSTORE_*`, `ANDROID_KEY_*` | GitHub secrets | Release signing (`scripts/make-keystore.sh`) |
+| `JWT_SECRET` | `.env` | Session signing on the server (**set in production**) |
+| `PORT`, `DB_FILE` | `.env` | Server port and SQLite file |
+
+All `.env` files, keystores (except the debug-only one) and `google-services.json` are git-ignored.
 
 ## Architecture
 
 ```
 server/
-  app.js            Express REST API (validation with zod, cached summaries, security headers, gzip)
-  db.js             SQLite schema via node:sqlite (WAL), nothing to install
-  priceEngine.js    Polls providers, records hourly price history, fires alerts
-  providers/        One adapter per store: fetchOffer() + placeOrder()
-  seed.js           Demo catalogue: 56 products, 6 months of history
-  firebaseVerify.js Verifies Google/Firebase ID tokens (Web Crypto)
-web/src/            React + TanStack Query, routes split into lazy chunks, SVG chart with no chart library
-web/src/local/      On-device backend: runs server/* on SQLite-in-WebAssembly with small shims for Node-only modules
-web/src/lib/cloud.ts  Google sign-in + Firestore backup/restore
-android/            Native Android project (Capacitor)
-test/               node:test API suite
+  liveFetch.js     Google Shopping (SerpApi) request + parsing into store offers
+  live.js          Groups offers into products across stores, stores prices as history, fires alerts
+  app.js           REST API (zod validation, cached summaries, security headers, gzip)
+  db.js            SQLite schema + migrations (node:sqlite)
+  firebaseVerify.js  Verifies Google sign-in tokens (Web Crypto)
+web/src/
+  local/           On-device backend: server/* runs inside the app on SQLite-in-WebAssembly
+  lib/live.ts      Live search (native HTTP on the phone, server proxy on the web), store links, caching
+  lib/cloud.ts     Google sign-in + Firestore backup/restore
+android/           Native Android project (Capacitor)
+test/              API tests (node:test)
 ```
-
-### Real store data
-
-Each store is reached through a **provider** (`server/providers/index.js`). Out of the box every store uses the built-in `SimulatedProvider`, which produces realistic price movements, sales and stock changes, so the whole app works with no credentials. **The prices in the demo are simulated, not real Amazon / Flipkart prices.** To go live, register a provider per store that calls that store's affiliate or partner API (for example Amazon PA-API or the Flipkart Affiliate API) for `fetchOffer`. For `placeOrder`, call a partner order API where the store offers one, or fall back to an affiliate deep-link checkout. Nothing else in the app has to change.

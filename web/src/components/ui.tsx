@@ -1,4 +1,4 @@
-import { memo, type ReactNode } from 'react';
+import { memo, useState, type ReactNode } from 'react';
 import { Link } from 'react-router-dom';
 import type { Summary } from '../lib/api';
 import { useMeta } from '../lib/hooks';
@@ -6,7 +6,16 @@ import { productQuery, useQuickView } from './QuickView';
 import { useQueryClient } from '@tanstack/react-query';
 import { money, compact } from '../lib/format';
 
-export const Thumb = memo(function Thumb({ emoji, hue, size = 'md' }: { emoji: string; hue: number; size?: 'sm' | 'md' | 'lg' }) {
+/** Real product photo when we have one (from the store listing), otherwise a neutral emoji tile. */
+export const Thumb = memo(function Thumb({ emoji, hue, image, size = 'md' }: { emoji: string; hue: number; image?: string | null; size?: 'sm' | 'md' | 'lg' }) {
+  const [failed, setFailed] = useState(false);
+  if (image && !failed) {
+    return (
+      <div className={`thumb thumb-${size} thumb-img`} aria-hidden>
+        <img src={image} alt="" loading="lazy" decoding="async" referrerPolicy="no-referrer" onError={() => setFailed(true)} />
+      </div>
+    );
+  }
   return (
     <div className={`thumb thumb-${size}`} style={{ background: `linear-gradient(135deg, hsl(${hue} 70% 92%), hsl(${(hue + 40) % 360} 70% 84%))` }} aria-hidden>
       <span>{emoji}</span>
@@ -45,12 +54,11 @@ export const ProductCard = memo(function ProductCard({ p }: { p: Summary }) {
       e.preventDefault();
       quickView(p);
     }}>
-      <Thumb emoji={p.emoji} hue={p.hue} />
+      <Thumb emoji={p.emoji} hue={p.hue} image={p.image} />
       <div className="pcard-body">
         <div className="muted xs">{p.brand}</div>
         <div className="pcard-title">{p.title}</div>
-        <Stars value={p.rating} count={p.reviewCount} />
-        {p.sold30 >= 100 && <div className="xs muted">🔥 {compact(p.sold30)}+ bought in past month</div>}
+        {p.rating > 0 && <Stars value={p.rating} count={p.reviewCount} />}
         <div className="pcard-price">
           <strong>{money(p.bestPrice)}</strong>
           {p.mrp > p.bestPrice && <s className="muted">{money(p.mrp)}</s>}

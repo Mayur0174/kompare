@@ -336,3 +336,13 @@ a.order-row:hover { border-color: var(--primary); }
 .list-link:active { background: var(--surface-2); }
 .danger-zone { border-color: color-mix(in srgb, var(--err) 35%, var(--border)); }
 @media (max-width: 640px) { .hscroll { grid-auto-columns: 46%; } }
+
+.thumb-img { background: #fff; overflow: hidden; }
+.thumb-img img { width: 100%; height: 100%; object-fit: contain; padding: 8px; }
+.thumb-sm.thumb-img img { padding: 4px; }
+.store-links { display: flex; flex-wrap: wrap; gap: 8px; }
+.store-link { display: inline-flex; align-items: center; gap: 6px; padding: 8px 12px; border-radius: 10px; border: 1px solid var(--border); background: var(--surface); font-weight: 600; font-size: 13px; }
+.store-link i { width: 9px; height: 9px; border-radius: 50%; background: var(--pc); }
+.store-link:active { background: var(--surface-2); }
+.notice { padding: 14px 16px; border-radius: 12px; background: var(--primary-soft); font-size: 14px; }
+.notice b { display: block; margin-bottom: 4px; }

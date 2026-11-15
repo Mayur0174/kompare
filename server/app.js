@@ -5,9 +5,9 @@ import path from 'node:path';
 import { z } from 'zod';
 import { tx, stmtCache, dataVersion } from './db.js';
 import { authenticate, requireAuth, hashPassword, verifyPassword, signToken } from './auth.js';
-import { getProvider } from './providers/index.js';
+import { fetchLiveOffers, ingestOffers, normQuery } from './live.js';
 import { HttpError, DAY, HOUR } from './util.js';
-import { CATEGORIES } from './catalog.js';
+import { CATEGORIES, SEARCH_URLS } from './catalog.js';
 import { config } from './config.js';
 import { verifyFirebaseIdToken } from './firebaseVerify.js';
 import { checkAlerts } from './priceEngine.js';
@@ -40,18 +40,6 @@ const AddressSchema = z.object({
   state: z.string().trim().min(2, 'Enter the state').max(60),
   pincode: z.string().trim().regex(/^[1-9]\d{5}$/, 'Enter a valid 6-digit PIN code'),
 });
-
-export function orderStatus(o, items, now = Date.now()) {
-  if (o.cancelled_at) return 'cancelled';
-  const eta = Math.max(...items.map((i) => i.eta));
-  const t = now - o.created_at;
-  const span = eta - o.created_at;
-  if (now >= eta) return 'delivered';
-  if (now >= eta - 12 * HOUR) return 'out_for_delivery';
-  if (t >= span * 0.3) return 'shipped';
-  if (t >= 2 * 60_000) return 'confirmed';
-  return 'placed';
-}
 
 export function createApp(db, { log = console } = {}) {
   const q = stmtCache(db);
@@ -91,7 +79,7 @@ export function createApp(db, { log = console } = {}) {
     if (summaryCache.key === key) return summaryCache.rows;
     const since = Date.now() - 30 * DAY;
     const rows = q(`
-      SELECT p.id, p.slug, p.title, p.brand, p.category, p.emoji, p.hue, p.rating, p.review_count, p.base_sales, p.search_text,
+      SELECT p.id, p.slug, p.title, p.brand, p.category, p.emoji, p.hue, p.image, p.rating, p.review_count, p.base_sales, p.search_text,
              MAX(l.mrp) AS mrp,
              MIN(CASE WHEN l.in_stock=1 THEN l.price END) AS best_price,
              MAX(l.price) AS max_price,
@@ -102,8 +90,11 @@ export function createApp(db, { log = console } = {}) {
     const best = q(`SELECT l.product_id, l.platform_id FROM listings l
       WHERE l.in_stock=1 AND l.price = (SELECT MIN(price) FROM listings x WHERE x.product_id=l.product_id AND x.in_stock=1)`).all();
     const bestMap = new Map(best.map((b) => [b.product_id, b.platform_id]));
-    const avg = q(`SELECT l.product_id, AVG(h.price) avg30, MIN(h.price) low30
-      FROM price_history h JOIN listings l ON l.id = h.listing_id WHERE h.ts >= ? GROUP BY l.product_id`).all(since);
+    // Average of each day's lowest price across stores (a real "over time" baseline, not a cross-store mix).
+    const avg = q(`SELECT product_id, AVG(daymin) avg30, MIN(daymin) low30, COUNT(*) days FROM (
+        SELECT l.product_id, h.ts / 86400000 AS d, MIN(h.price) daymin
+        FROM price_history h JOIN listings l ON l.id = h.listing_id WHERE h.ts >= ? GROUP BY l.product_id, d
+      ) GROUP BY product_id`).all(since);
     const avgMap = new Map(avg.map((a) => [a.product_id, a]));
     const dayNo = Math.floor(Date.now() / DAY);
     const views = new Map(q('SELECT product_id, SUM(n) n FROM product_views WHERE day > ? GROUP BY product_id').all(dayNo - 7).map((r) => [r.product_id, r.n]));
@@ -118,13 +109,14 @@ export function createApp(db, { log = console } = {}) {
       rows: rows.map((r) => {
         const a = avgMap.get(r.id);
         const price = r.best_price ?? r.max_price;
-        const dropPct = a ? Math.round((1 - price / a.avg30) * 1000) / 10 : 0;
+        // Only meaningful once there are a few days of real price checks.
+        const dropPct = a && a.days >= 3 ? Math.round((1 - price / a.avg30) * 1000) / 10 : 0;
         const views7 = views.get(r.id) || 0;
         return {
           sold30: r.base_sales + (sold.get(r.id) || 0),
           views7,
           trendScore: views7 + 25 * (watches.get(r.id) || 0) + 40 * (sold.get(r.id) || 0) + Math.max(0, dropPct) * 15,
-          id: r.id, slug: r.slug, title: r.title, brand: r.brand, category: r.category, emoji: r.emoji, hue: r.hue,
+          id: r.id, slug: r.slug, title: r.title, brand: r.brand, category: r.category, emoji: r.emoji, hue: r.hue, image: r.image || null,
           rating: r.rating, reviewCount: r.review_count, mrp: r.mrp, bestPrice: price, maxPrice: r.max_price,
           bestPlatform: bestMap.get(r.id) || null, offers: r.offers, inStock: r.in_stock_offers > 0,
           discount: Math.round((1 - price / r.mrp) * 100),
@@ -144,7 +136,7 @@ export function createApp(db, { log = console } = {}) {
   app.get('/api/health', wrap(() => ({ ok: true, time: Date.now() })));
   app.get('/api/meta', wrap((_req, res) => {
     res.set('Cache-Control', 'public, max-age=300');
-    const platforms = q('SELECT * FROM platforms').all().map((p) => ({ ...p, cod: !!p.cod, provider: getProvider(p.id).kind }));
+    const platforms = q('SELECT * FROM platforms').all().map((p) => ({ ...p, cod: !!p.cod, searchUrl: SEARCH_URLS[p.id] || null }));
     const counts = new Map(q('SELECT category, COUNT(*) c FROM products GROUP BY category').all().map((r) => [r.category, r.c]));
     return { platforms, categories: CATEGORIES.map(({ platforms: _p, ...c }) => ({ ...c, count: counts.get(c.id) || 0 })) };
   }));
@@ -218,56 +210,6 @@ export function createApp(db, { log = console } = {}) {
     return { items };
   }));
 
-  /** Pick the top-N by a score while capping items per category, so the catalogue is varied. */
-  function diversified(arr, score, n = 12, perCat = 3) {
-    const out = [], perCount = new Map();
-    for (const s of [...arr].sort((a, b) => score(b) - score(a))) {
-      const c = perCount.get(s.category) || 0;
-      if (c >= perCat) continue;
-      perCount.set(s.category, c + 1);
-      out.push(s);
-      if (out.length >= n) break;
-    }
-    return out;
-  }
-
-  // Trending / best-seller catalogue: a snapshot recomputed every config.feedRefreshMs (12h by default)
-  // and persisted, so the home page is stable between refreshes and survives restarts.
-  function homeFeed(force = false) {
-    const row = q("SELECT data, computed_at FROM feed_snapshots WHERE id='home'").get();
-    const now = Date.now();
-    if (row && !force && now - row.computed_at < config.feedRefreshMs) {
-      return { ...JSON.parse(row.data), updatedAt: row.computed_at, nextUpdateAt: row.computed_at + config.feedRefreshMs };
-    }
-    const all = summaries().filter((s) => s.inStock);
-    const data = {
-      trending: diversified(all, (s) => s.trendScore).map((s) => s.id),
-      bestsellers: diversified(all, (s) => s.sold30).map((s) => s.id),
-    };
-    q("INSERT INTO feed_snapshots (id, data, computed_at) VALUES ('home', ?, ?) ON CONFLICT(id) DO UPDATE SET data=excluded.data, computed_at=excluded.computed_at")
-      .run(JSON.stringify(data), now);
-    return { ...data, updatedAt: now, nextUpdateAt: now + config.feedRefreshMs };
-  }
-  app.locals.refreshHomeFeed = () => homeFeed(true);
-
-  app.get('/api/deals', wrap(() => {
-    const all = summaries().filter((s) => s.inStock);
-    const byId = new Map(summaries().map((s) => [s.id, s]));
-    const pick = (arr, n = 8) => arr.slice(0, n).map(publicSummary);
-    const feed = homeFeed();
-    // Membership is frozen by the snapshot; prices on the cards stay live.
-    const hydrate = (ids) => ids.map((id) => byId.get(id)).filter(Boolean).map(publicSummary);
-    return {
-      trending: hydrate(feed.trending),
-      bestsellers: hydrate(feed.bestsellers),
-      feedUpdatedAt: feed.updatedAt,
-      feedNextUpdateAt: feed.nextUpdateAt,
-      drops: pick([...all].sort((a, b) => b.dropPct - a.dropPct)),
-      discounts: pick([...all].sort((a, b) => b.discount - a.discount)),
-      spreads: pick([...all].sort((a, b) => b.spread / b.bestPrice - a.spread / a.bestPrice)),
-    };
-  }));
-
   // Paste a product URL from any supported store and jump to its comparison page.
   app.get('/api/resolve', wrap((req) => {
     const raw = String(req.query.url || '').trim();
@@ -317,7 +259,8 @@ export function createApp(db, { log = console } = {}) {
     const best = listings.find((l) => l.inStock) || null;
     // Buy-timing verdict: where does today's best price sit between the all-time low and average?
     let verdict = null;
-    if (best) {
+    const points = q('SELECT COUNT(DISTINCT h.ts / 86400000) d FROM price_history h JOIN listings l ON l.id=h.listing_id WHERE l.product_id=?').get(p.id).d;
+    if (best && points >= 3) {
       const pos = overall.avg === overall.low ? 0 : (best.price - overall.low) / (overall.avg - overall.low);
       verdict = pos <= 0.35 ? { level: 'great', text: 'Great time to buy – close to the lowest price we have seen.' }
         : pos <= 1 ? { level: 'good', text: 'Fair price – below the 6-month average.' }
@@ -330,12 +273,14 @@ export function createApp(db, { log = console } = {}) {
     return {
       product: {
         id: p.id, slug: p.slug, title: p.title, brand: p.brand, category: p.category, description: p.description,
-        specs: JSON.parse(p.specs), emoji: p.emoji, hue: p.hue, rating: p.rating, reviewCount: p.review_count,
+        specs: JSON.parse(p.specs), emoji: p.emoji, hue: p.hue, rating: p.rating, reviewCount: p.review_count, image: p.image || null,
       },
       listings,
       stats: Object.fromEntries(stats.map((s) => [s.platform_id, { low: s.low, high: s.high, avg: s.avg }])),
       overall: { low: overall.low, high: overall.high, avg: overall.avg, lowAt: overall.low_ts },
       verdict, similar, watching, alert: alert && { ...alert, active: !!alert.active },
+      trackedSince: q('SELECT MIN(h.ts) t FROM price_history h JOIN listings l ON l.id=h.listing_id WHERE l.product_id=?').get(p.id).t,
+      image: p.image || null,
     };
   }));
 
@@ -420,6 +365,14 @@ export function createApp(db, { log = console } = {}) {
   });
 
   // ---------- cloud backup: export / import a user's data ----------
+  // Live products may not exist on another device yet, so backups carry enough to re-create them.
+  function withProduct({ id, ...row }) {
+    const p = q('SELECT title, image FROM products WHERE id=?').get(id);
+    const offers = q('SELECT l.url, l.price, l.mrp, l.rating, pl.name source FROM listings l JOIN platforms pl ON pl.id=l.platform_id WHERE l.product_id=?').all(id)
+      .map((l) => ({ title: p.title, source: l.source, price: l.price, oldPrice: l.mrp > l.price ? l.mrp : null, link: l.url, image: p.image, rating: l.rating || null }));
+    return { ...row, product: { title: p.title, offers } };
+  }
+
   app.get('/api/sync/export', requireAuth, wrap((req) => {
     const uid = req.userId;
     const u = q('SELECT name, address FROM users WHERE id=?').get(uid);
@@ -434,8 +387,8 @@ export function createApp(db, { log = console } = {}) {
       version: 1,
       exportedAt: Date.now(),
       profile: { name: u.name, address: u.address },
-      watchlist: q('SELECT p.slug, w.created_at FROM watchlist w JOIN products p ON p.id=w.product_id WHERE w.user_id=?').all(uid),
-      alerts: q('SELECT p.slug, a.target_price, a.active, a.triggered_at, a.created_at FROM alerts a JOIN products p ON p.id=a.product_id WHERE a.user_id=?').all(uid),
+      watchlist: q('SELECT p.id, p.slug, w.created_at FROM watchlist w JOIN products p ON p.id=w.product_id WHERE w.user_id=?').all(uid).map(withProduct),
+      alerts: q('SELECT p.id, p.slug, a.target_price, a.active, a.triggered_at, a.created_at FROM alerts a JOIN products p ON p.id=a.product_id WHERE a.user_id=?').all(uid).map(withProduct),
       cart: q('SELECT l.url, c.qty, c.added_price, c.created_at FROM cart_items c JOIN listings l ON l.id=c.listing_id WHERE c.user_id=?').all(uid),
       notifications: q('SELECT title, body, link, read, created_at FROM notifications WHERE user_id=? ORDER BY created_at DESC LIMIT 100').all(uid),
       orders,
@@ -445,8 +398,8 @@ export function createApp(db, { log = console } = {}) {
   const SnapshotSchema = z.object({
     version: z.literal(1),
     profile: z.object({ name: z.string().max(120), address: z.string().max(2000).nullable() }),
-    watchlist: z.array(z.object({ slug: z.string(), created_at: z.number() })).max(2000),
-    alerts: z.array(z.object({ slug: z.string(), target_price: z.number().int(), active: z.number(), triggered_at: z.number().nullable(), created_at: z.number() })).max(2000),
+    watchlist: z.array(z.object({ slug: z.string(), created_at: z.number(), product: z.any().optional() })).max(2000),
+    alerts: z.array(z.object({ slug: z.string(), target_price: z.number().int(), active: z.number(), triggered_at: z.number().nullable(), created_at: z.number(), product: z.any().optional() })).max(2000),
     cart: z.array(z.object({ url: z.string(), qty: z.number().int().min(1).max(10), added_price: z.number().int(), created_at: z.number() })).max(200),
     notifications: z.array(z.object({ title: z.string(), body: z.string(), link: z.string().nullable(), read: z.number(), created_at: z.number() })).max(500),
     orders: z.array(z.object({
@@ -460,7 +413,15 @@ export function createApp(db, { log = console } = {}) {
   app.post('/api/sync/import', requireAuth, wrap((req) => {
     const s = parse(SnapshotSchema, req.body?.snapshot);
     const uid = req.userId;
+    // Re-create products this device hasn't seen yet from the offers stored in the backup.
+    const restored = new Map();
+    for (const e of [...s.watchlist, ...s.alerts]) {
+      if (restored.has(e.slug) || q('SELECT 1 FROM products WHERE slug=?').get(e.slug)) continue;
+      const offers = (e.product?.offers || []).map((o) => OfferSchema.safeParse(o)).filter((r) => r.success).map((r) => r.data);
+      if (offers.length) { const [id] = ingestOffers(db, e.product.title, offers); if (id) restored.set(e.slug, id); }
+    }
     const productId = new Map(q('SELECT id, slug FROM products').all().map((p) => [p.slug, p.id]));
+    for (const [slug, id] of restored) productId.set(slug, id);
     const listing = new Map(q('SELECT id, url, product_id FROM listings').all().map((l) => [l.url, l]));
     tx(db, () => {
       for (const t of ['watchlist', 'alerts', 'cart_items', 'notifications', 'orders']) q(`DELETE FROM ${t} WHERE user_id=?`).run(uid);
@@ -555,143 +516,40 @@ export function createApp(db, { log = console } = {}) {
     return { ok: true };
   }));
 
-  // ---------- cart ----------
-  function cartView(userId) {
-    const plats = new Map(q('SELECT * FROM platforms').all().map((x) => [x.id, x]));
-    const rows = q(`SELECT c.qty, c.added_price, l.*, p.title, p.slug, p.emoji, p.hue FROM cart_items c
-      JOIN listings l ON l.id=c.listing_id JOIN products p ON p.id=l.product_id WHERE c.user_id=? ORDER BY c.created_at`).all(userId);
-    // Cheapest in-stock alternative per product, to nudge users to the better deal.
-    const alt = new Map(q(`SELECT product_id, platform_id, MIN(price) price FROM listings WHERE in_stock=1 GROUP BY product_id`).all().map((r) => [r.product_id, r]));
-    const groups = new Map();
-    for (const r of rows) {
-      const plat = plats.get(r.platform_id);
-      const g = groups.get(r.platform_id) || { platformId: r.platform_id, items: [], subtotal: 0, mrpTotal: 0, shipping: 0 };
-      const a = alt.get(r.product_id);
-      g.items.push({
-        listingId: r.id, productId: r.product_id, slug: r.slug, title: r.title, emoji: r.emoji, hue: r.hue, qty: r.qty,
-        price: r.price, mrp: r.mrp, addedPrice: r.added_price, inStock: !!r.in_stock && r.stock_qty >= r.qty, deliveryDays: r.delivery_days,
-        cheaperAt: a && a.platform_id !== r.platform_id && a.price < r.price ? { platformId: a.platform_id, price: a.price } : null,
-      });
-      g.subtotal += r.price * r.qty;
-      g.mrpTotal += r.mrp * r.qty;
-      groups.set(r.platform_id, g);
-    }
-    let subtotal = 0, shipping = 0, mrpTotal = 0, count = 0;
-    for (const g of groups.values()) {
-      const plat = plats.get(g.platformId);
-      g.shipping = g.subtotal >= plat.free_shipping_above ? 0 : plat.shipping_fee;
-      g.freeShippingGap = g.shipping ? plat.free_shipping_above - g.subtotal : 0;
-      subtotal += g.subtotal; shipping += g.shipping; mrpTotal += g.mrpTotal;
-      count += g.items.reduce((n, i) => n + i.qty, 0);
-    }
-    return { groups: [...groups.values()], subtotal, shipping, total: subtotal + shipping, savings: mrpTotal - subtotal, count };
+  // ---------- live, real product data ----------
+  // The app (or this server) fetches Google Shopping results and posts them here to be stored:
+  // products are grouped across stores, every price check is recorded as history, alerts are checked.
+  app.get('/api/live/cached', wrap((req) => {
+    const q0 = normQuery(String(req.query.q || ''));
+    const maxAge = Math.min(Number(req.query.maxAge) || 6 * HOUR, 7 * 24 * HOUR);
+    const row = q0 && q('SELECT product_ids, fetched_at FROM live_queries WHERE q=?').get(q0);
+    if (!row || Date.now() - row.fetched_at > maxAge) return { fresh: false, items: [] };
+    return { fresh: true, fetchedAt: row.fetched_at, items: itemsFor(JSON.parse(row.product_ids)) };
+  }));
+  const OfferSchema = z.object({
+    title: z.string().min(1).max(200), source: z.string().min(1).max(60), price: z.number().int().positive(),
+    oldPrice: z.number().int().positive().nullable().optional(), link: z.string().url().max(2000), googleLink: z.string().url().max(2000).nullable().optional(),
+    image: z.string().url().max(2000).nullable().optional(), rating: z.number().min(0).max(5).nullable().optional(),
+    reviews: z.number().int().nonnegative().nullable().optional(), delivery: z.string().max(80).nullable().optional(), productId: z.string().max(100).nullable().optional(),
+  });
+  app.post('/api/live/ingest', wrap((req) => {
+    const b = parse(z.object({ query: z.string().trim().min(1).max(120), offers: z.array(OfferSchema).max(120) }), req.body);
+    const ids = ingestOffers(db, b.query, b.offers);
+    return { fetchedAt: Date.now(), items: itemsFor(ids) };
+  }));
+  // Server mode: fetch live results here so the API key stays on the server.
+  app.get('/api/live/search', (req, res, next) => {
+    const query = String(req.query.q || '').trim().slice(0, 120);
+    if (!query) return next(new HttpError(400, 'Enter something to search'));
+    if (!config.serpApiKey) return next(new HttpError(501, 'Live prices are not configured on this server'));
+    fetchLiveOffers(query, config.serpApiKey)
+      .then((offers) => res.json({ fetchedAt: Date.now(), items: itemsFor(ingestOffers(db, query, offers)) }))
+      .catch(next);
+  });
+  function itemsFor(ids) {
+    const byId = new Map(summaries().map((s) => [s.id, s]));
+    return ids.map((id) => byId.get(id)).filter(Boolean).map(publicSummary);
   }
-
-  app.get('/api/cart', requireAuth, wrap((req) => cartView(req.userId)));
-  app.post('/api/cart', requireAuth, wrap((req) => {
-    const b = parse(z.object({ listingId: z.number().int().positive(), qty: z.number().int().min(1).max(10).default(1) }), req.body);
-    const l = q('SELECT * FROM listings WHERE id=?').get(b.listingId);
-    if (!l) throw new HttpError(404, 'Offer not found');
-    if (!l.in_stock) throw new HttpError(409, 'This offer is out of stock');
-    q(`INSERT INTO cart_items (user_id,listing_id,qty,added_price,created_at) VALUES (?,?,?,?,?)
-       ON CONFLICT(user_id,listing_id) DO UPDATE SET qty=MIN(10, cart_items.qty + excluded.qty)`).run(req.userId, l.id, b.qty, l.price, Date.now());
-    return cartView(req.userId);
-  }));
-  app.patch('/api/cart/:listingId', requireAuth, wrap((req) => {
-    const qty = parse(z.number().int().min(1).max(10), req.body?.qty);
-    q('UPDATE cart_items SET qty=? WHERE user_id=? AND listing_id=?').run(qty, req.userId, Number(req.params.listingId));
-    return cartView(req.userId);
-  }));
-  app.delete('/api/cart/:listingId', requireAuth, wrap((req) => {
-    q('DELETE FROM cart_items WHERE user_id=? AND listing_id=?').run(req.userId, Number(req.params.listingId));
-    return cartView(req.userId);
-  }));
-
-  // ---------- checkout & orders ----------
-  app.post('/api/checkout', requireAuth, wrap((req) => {
-    const b = parse(z.object({
-      address: AddressSchema,
-      paymentMethod: z.enum(['upi', 'card', 'netbanking', 'cod']),
-      expectedTotal: z.number().int().nonnegative(),
-      idempotencyKey: z.string().min(8).max(64),
-      saveAddress: z.boolean().optional(),
-    }), req.body);
-
-    const existing = q('SELECT id FROM orders WHERE user_id=? AND idempotency_key=?').get(req.userId, b.idempotencyKey);
-    if (existing) return { orderId: existing.id, duplicate: true };
-
-    return tx(db, () => {
-      const cart = cartView(req.userId);
-      if (!cart.count) throw new HttpError(400, 'Your cart is empty');
-      const oos = cart.groups.flatMap((g) => g.items).filter((i) => !i.inStock);
-      if (oos.length) throw new HttpError(409, `Out of stock: ${oos.map((i) => i.title).join(', ')}`, { code: 'OUT_OF_STOCK' });
-      if (cart.total !== b.expectedTotal) {
-        throw new HttpError(409, 'Prices changed since you last looked. Please review your cart.', { code: 'PRICE_CHANGED', total: cart.total });
-      }
-      if (b.paymentMethod === 'cod' && cart.total > 50_000) throw new HttpError(400, 'Cash on delivery is available for orders up to ₹50,000');
-
-      const now = Date.now();
-      const { lastInsertRowid } = q(`INSERT INTO orders (user_id,subtotal,shipping,total,savings,payment_method,address,idempotency_key,created_at)
-        VALUES (?,?,?,?,?,?,?,?,?)`).run(req.userId, cart.subtotal, cart.shipping, cart.total, cart.savings, b.paymentMethod, JSON.stringify(b.address), b.idempotencyKey, now);
-      const orderId = Number(lastInsertRowid);
-      const insItem = q(`INSERT INTO order_items (order_id,listing_id,product_id,platform_id,title,unit_price,mrp,qty,platform_order_ref,eta)
-        VALUES (?,?,?,?,?,?,?,?,?,?)`);
-      const decStock = q('UPDATE listings SET stock_qty = stock_qty - ?, in_stock = CASE WHEN stock_qty - ? > 0 THEN 1 ELSE 0 END WHERE id=?');
-      for (const g of cart.groups) {
-        // One sub-order per marketplace, placed through that platform's provider.
-        const placed = getProvider(g.platformId).placeOrder({ items: g.items.map((i) => ({ ...i, delivery_days: i.deliveryDays })), address: b.address });
-        for (const i of g.items) {
-          insItem.run(orderId, i.listingId, i.productId, g.platformId, i.title, i.price, i.mrp, i.qty, placed.ref, placed.eta);
-          decStock.run(i.qty, i.qty, i.listingId);
-        }
-      }
-      q('DELETE FROM cart_items WHERE user_id=?').run(req.userId);
-      if (b.saveAddress !== false) q('UPDATE users SET address=? WHERE id=?').run(JSON.stringify(b.address), req.userId);
-      q('INSERT INTO notifications (user_id,title,body,link,created_at) VALUES (?,?,?,?,?)').run(
-        req.userId, `Order #${orderId} placed`, `${cart.count} item(s) across ${cart.groups.length} store(s). You saved ₹${cart.savings.toLocaleString('en-IN')}.`, `/orders/${orderId}`, now);
-      dataVersion.v++;
-      return { orderId };
-    });
-  }));
-
-  function orderView(o) {
-    const items = q('SELECT * FROM order_items WHERE order_id=?').all(o.id);
-    const slugs = new Map(q(`SELECT id, slug, emoji, hue FROM products WHERE id IN (${items.map(() => '?').join(',') || 'NULL'})`).all(...items.map((i) => i.product_id)).map((p) => [p.id, p]));
-    const status = orderStatus(o, items);
-    const byPlatform = {};
-    for (const i of items) {
-      const sp = slugs.get(i.product_id);
-      (byPlatform[i.platform_id] ||= { platformId: i.platform_id, ref: i.platform_order_ref, eta: i.eta, items: [] }).items.push({
-        title: i.title, qty: i.qty, unitPrice: i.unit_price, mrp: i.mrp, slug: sp?.slug, emoji: sp?.emoji, hue: sp?.hue,
-      });
-    }
-    return {
-      id: o.id, status, createdAt: o.created_at, cancelledAt: o.cancelled_at, subtotal: o.subtotal, shipping: o.shipping, total: o.total,
-      savings: o.savings, paymentMethod: o.payment_method, address: JSON.parse(o.address), shipments: Object.values(byPlatform),
-      cancellable: ['placed', 'confirmed'].includes(status),
-    };
-  }
-
-  app.get('/api/orders', requireAuth, wrap((req) => ({
-    items: q('SELECT * FROM orders WHERE user_id=? ORDER BY created_at DESC LIMIT 100').all(req.userId).map(orderView),
-  })));
-  app.get('/api/orders/:id', requireAuth, wrap((req) => {
-    const o = q('SELECT * FROM orders WHERE id=? AND user_id=?').get(Number(req.params.id), req.userId);
-    if (!o) throw new HttpError(404, 'Order not found');
-    return orderView(o);
-  }));
-  app.post('/api/orders/:id/cancel', requireAuth, wrap((req) => tx(db, () => {
-    const o = q('SELECT * FROM orders WHERE id=? AND user_id=?').get(Number(req.params.id), req.userId);
-    if (!o) throw new HttpError(404, 'Order not found');
-    const view = orderView(o);
-    if (!view.cancellable) throw new HttpError(409, `Order can't be cancelled once ${view.status.replace(/_/g, ' ')}`);
-    q('UPDATE orders SET cancelled_at=? WHERE id=?').run(Date.now(), o.id);
-    for (const i of q('SELECT listing_id, qty FROM order_items WHERE order_id=?').all(o.id)) {
-      q('UPDATE listings SET stock_qty = stock_qty + ?, in_stock = 1 WHERE id=?').run(i.qty, i.listing_id);
-    }
-    dataVersion.v++;
-    return orderView(q('SELECT * FROM orders WHERE id=?').get(o.id));
-  })));
 
   app.use('/api', (_req, _res, next) => next(new HttpError(404, 'Not found')));
 

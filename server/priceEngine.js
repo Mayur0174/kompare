@@ -1,38 +1,8 @@
-import { tx, dataVersion } from './db.js';
-import { getProvider } from './providers/index.js';
-import { HOUR } from './util.js';
-
 const fmt = (n) => `₹${n.toLocaleString('en-IN')}`;
 
-/**
- * Refresh a slice of listings from their providers, record history (one point
- * per listing per hour, so storage stays bounded) and fire price alerts.
- */
-export function refreshPrices(db, { fraction = 0.2, now = Date.now(), rnd = Math.random } = {}) {
-  const all = db.prepare('SELECT * FROM listings').all();
-  const picked = all.filter(() => rnd() < fraction);
-  const changedProducts = new Set();
-
-  tx(db, () => {
-    const upd = db.prepare('UPDATE listings SET price=?, in_stock=?, stock_qty=?, delivery_days=?, updated_at=? WHERE id=?');
-    const hist = db.prepare('INSERT INTO price_history (listing_id, ts, price) VALUES (?,?,?) ON CONFLICT(listing_id, ts) DO UPDATE SET price=excluded.price');
-    const bucket = Math.floor(now / HOUR) * HOUR;
-    for (const l of picked) {
-      const offer = getProvider(l.platform_id).fetchOffer(l, rnd);
-      if (!offer) continue;
-      upd.run(offer.price, offer.inStock, offer.stockQty, offer.deliveryDays, now, l.id);
-      if (offer.price !== l.price) {
-        hist.run(l.id, bucket, offer.price);
-        changedProducts.add(l.product_id);
-      }
-      if (offer.inStock !== l.in_stock) changedProducts.add(l.product_id);
-    }
-    if (changedProducts.size) { dataVersion.v++; checkAlerts(db, [...changedProducts], now); }
-  });
-  return { checked: picked.length, changedProducts: changedProducts.size };
-}
-
+/** Notify users whose target price is met by the cheapest in-stock offer of these products. */
 export function checkAlerts(db, productIds, now = Date.now()) {
+  if (!productIds.length) return 0;
   const placeholders = productIds.map(() => '?').join(',');
   const hits = db.prepare(`
     SELECT a.id, a.user_id, a.target_price, p.title, p.slug, best.price, best.platform_id, pl.name AS platform_name
@@ -52,7 +22,7 @@ export function checkAlerts(db, productIds, now = Date.now()) {
 }
 
 /**
- * Keep storage bounded: hourly points for the last 7 days, one point per day (the day's last)
+ * Keep storage bounded: every price check for the last 7 days, one point per day (the day's last)
  * before that, and nothing older than a year.
  */
 export function compactHistory(db, now = Date.now()) {
@@ -61,22 +31,4 @@ export function compactHistory(db, now = Date.now()) {
       SELECT listing_id, MAX(ts) FROM price_history WHERE ts < ? GROUP BY listing_id, ts / 86400000)`).run(weekAgo, weekAgo);
   const r2 = db.prepare('DELETE FROM price_history WHERE ts < ?').run(now - 366 * 86_400_000);
   return r1.changes + r2.changes;
-}
-
-export function startPriceEngine(db, intervalMs, log = console) {
-  if (!intervalMs) return () => {};
-  let lastCompaction = 0;
-  const timer = setInterval(() => {
-    try {
-      if (Date.now() - lastCompaction > 86_400_000) {
-        lastCompaction = Date.now();
-        const removed = compactHistory(db);
-        if (removed) { dataVersion.v++; log.info?.(`[prices] compacted ${removed} history points`); }
-      }
-      const r = refreshPrices(db);
-      if (r.changedProducts) log.info?.(`[prices] refreshed ${r.checked} listings, ${r.changedProducts} products changed`);
-    } catch (e) { log.error?.('[prices] refresh failed', e); }
-  }, intervalMs);
-  timer.unref?.();
-  return () => clearInterval(timer);
 }

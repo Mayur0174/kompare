@@ -1,7 +1,9 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { api, setMutationListener, setUnauthorizedHandler, tokenStore, type Cart, type Category, type Platform, type User } from './api';
+import { api, setMutationListener, setUnauthorizedHandler, tokenStore, type Category, type Platform, type User } from './api';
 import { currentGoogleUid, noteLocalChange, signOutGoogle, syncNow } from './cloud';
+import { refreshWatched } from './live';
+import type { Summary } from './api';
 
 // ---------- toasts ----------
 type Toast = { id: number; text: string; kind: 'ok' | 'err' };
@@ -38,8 +40,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   // Restore from / back up to the Google account, then refresh whatever is on screen.
   const runSync = useCallback(() => {
-    if (!currentGoogleUid()) return;
-    syncNow().then((r) => { if (r === 'restored') qc.invalidateQueries(); }).catch((e) => console.warn('[cloud] sync failed', e));
+    const cloudSync = currentGoogleUid() ? syncNow().then((r) => { if (r === 'restored') qc.invalidateQueries(); }) : Promise.resolve();
+    cloudSync.catch((e) => console.warn('[cloud] sync failed', e)).finally(() => {
+      // Re-check live prices of watched products (twice a day) so price alerts can fire.
+      api<{ items: Summary[] }>('/watchlist')
+        .then((w) => refreshWatched(w.items.map((p) => p.title)))
+        .then((n) => { if (n) for (const k of ['watchlist', 'alerts', 'notifications', 'product']) qc.invalidateQueries({ queryKey: [k] }); })
+        .catch(() => {});
+    });
   }, [qc]);
 
   const logout = useCallback(() => {
@@ -47,7 +55,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setCloud(false);
     tokenStore.set(null);
     setUser(null);
-    qc.removeQueries({ predicate: (q) => ['cart', 'watchlist', 'alerts', 'orders', 'order', 'notifications'].includes(String(q.queryKey[0])) });
+    qc.removeQueries({ predicate: (q) => ['watchlist', 'alerts', 'notifications'].includes(String(q.queryKey[0])) });
     qc.invalidateQueries({ queryKey: ['product'] });
   }, [qc]);
 
@@ -80,21 +88,6 @@ export function useMeta() {
   });
   const platforms = useMemo(() => new Map((q.data?.platforms || []).map((p) => [p.id, p])), [q.data]);
   return { platforms, categories: q.data?.categories || [], list: q.data?.platforms || [] };
-}
-
-export function useCart() {
-  const { user } = useAuth();
-  return useQuery({ queryKey: ['cart'], queryFn: () => api<Cart>('/cart'), enabled: !!user, refetchInterval: 60_000 });
-}
-
-export function useAddToCart() {
-  const qc = useQueryClient();
-  const toast = useToast();
-  return useMutation({
-    mutationFn: (v: { listingId: number; qty?: number }) => api<Cart>('/cart', { method: 'POST', body: { listingId: v.listingId, qty: v.qty ?? 1 } }),
-    onSuccess: (cart) => { qc.setQueryData(['cart'], cart); toast('Added to cart'); },
-    onError: (e: Error) => toast(e.message, 'err'),
-  });
 }
 
 export function useWatchToggle() {

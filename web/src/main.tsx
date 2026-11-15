@@ -15,22 +15,12 @@ import './styles.css';
 const pages = {
   Search: () => import('./pages/Search'),
   Product: () => import('./pages/Product'),
-  Deals: () => import('./pages/Deals'),
-  Cart: () => import('./pages/Cart'),
-  Checkout: () => import('./pages/Checkout'),
-  Orders: () => import('./pages/Orders'),
-  OrderDetail: () => import('./pages/OrderDetail'),
   Watchlist: () => import('./pages/Watchlist'),
   Account: () => import('./pages/Account'),
   Login: () => import('./pages/Login'),
 };
 const Search = lazy(pages.Search);
 const Product = lazy(pages.Product);
-const Deals = lazy(pages.Deals);
-const Cart = lazy(pages.Cart);
-const Checkout = lazy(pages.Checkout);
-const Orders = lazy(pages.Orders);
-const OrderDetail = lazy(pages.OrderDetail);
 const Watchlist = lazy(pages.Watchlist);
 const Account = lazy(pages.Account);
 const Login = lazy(pages.Login);
@@ -125,13 +115,8 @@ function App() {
           <Routes>
             <Route path="/" element={<Home />} />
             <Route path="/search" element={<Search />} />
-            <Route path="/deals" element={<Deals />} />
             <Route path="/p/:slug" element={<Product />} />
             <Route path="/login" element={<Login />} />
-            <Route path="/cart" element={<Protected><Cart /></Protected>} />
-            <Route path="/checkout" element={<Protected><Checkout /></Protected>} />
-            <Route path="/orders" element={<Protected><Orders /></Protected>} />
-            <Route path="/orders/:id" element={<Protected><OrderDetail /></Protected>} />
             <Route path="/watchlist" element={<Protected><Watchlist /></Protected>} />
             <Route path="/account" element={<Protected><Account /></Protected>} />
             <Route path="*" element={<NotFound />} />
@@ -143,8 +128,8 @@ function App() {
       <TabBar />
       <footer className="footer">
         <div className="container">
-          <b>Kompare</b> · One app for every store. Prices are refreshed continuously from each platform's provider.
-          <span className="muted"> Demo build: offers come from the built-in simulated provider.</span>
+          <b>Kompare</b> · Live prices from each store's own listings. Purchases are completed on the store.
+          
         </div>
       </footer>
     </>

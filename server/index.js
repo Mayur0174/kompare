@@ -1,34 +1,26 @@
 import { openDb } from './db.js';
 import { seed } from './seed.js';
 import { createApp } from './app.js';
-import { startPriceEngine } from './priceEngine.js';
+import { compactHistory } from './priceEngine.js';
 import { config } from './config.js';
 
 const db = openDb();
-if (seed(db)) console.log('[db] seeded demo catalogue');
+if (seed(db)) console.log('[db] initialised stores');
 const app = createApp(db);
-const stopEngine = startPriceEngine(db, config.refreshIntervalMs);
-// Recompute the home-page trending / best-seller catalogue on schedule (every 12h by default).
-// Only recompute at boot if the persisted snapshot is stale.
-fetchFeedIfStale();
-const feedTimer = setInterval(() => {
-  try { app.locals.refreshHomeFeed(); console.log('[feed] home catalogue refreshed'); } catch (e) { console.error('[feed] refresh failed', e); }
-}, config.feedRefreshMs);
-feedTimer.unref();
+if (!config.serpApiKey) console.warn('[kompare] SERPAPI_KEY not set: live prices are disabled (store search links still work).');
+
+// Keep price history compact (daily).
+compactHistory(db);
+const compactTimer = setInterval(() => compactHistory(db), 24 * 3600 * 1000);
+compactTimer.unref();
 
 const server = app.listen(config.port, () => {
   console.log(`[kompare] listening on http://localhost:${config.port} (${config.isProd ? 'production' : 'development'})`);
 });
 
-function fetchFeedIfStale() {
-  const row = db.prepare("SELECT computed_at FROM feed_snapshots WHERE id='home'").get();
-  if (!row || Date.now() - row.computed_at >= config.feedRefreshMs) app.locals.refreshHomeFeed();
-}
-
 function shutdown(signal) {
   console.log(`[kompare] ${signal} received, shutting down`);
-  stopEngine();
-  clearInterval(feedTimer);
+  clearInterval(compactTimer);
   server.close(() => { db.close(); process.exit(0); });
   setTimeout(() => process.exit(1), 5000).unref();
 }

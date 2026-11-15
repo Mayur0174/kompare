@@ -3,7 +3,18 @@ import assert from 'node:assert/strict';
 import { openDb } from '../server/db.js';
 import { seed } from '../server/seed.js';
 import { createApp } from '../server/app.js';
-import { refreshPrices } from '../server/priceEngine.js';
+import { normalizeResults, groupOffers, platformIdFor } from '../server/live.js';
+
+// Shape of a SerpApi google_shopping response (abridged).
+const serp = (price = 64999) => ({
+  shopping_results: [
+    { position: 1, title: 'Apple iPhone 15 (128 GB) - Black', source: 'Amazon.in', extracted_price: price, extracted_old_price: 69900, link: 'https://www.amazon.in/dp/B0CHX1W1XY', thumbnail: 'https://example-cdn.test/iphone.jpg', rating: 4.5, reviews: 1200, delivery: 'Free delivery', product_id: '111' },
+    { position: 2, title: 'Apple iPhone 15 128GB Black', source: 'Flipkart', extracted_price: price + 1000, link: 'https://www.flipkart.com/apple-iphone-15-black-128-gb/p/itm6ac6485515ae4', product_id: '111' },
+    { position: 3, title: 'Apple iPhone 15 (128GB) Black', source: 'Croma', price: `₹${(price + 500).toLocaleString('en-IN')}.00`, product_link: 'https://www.google.com/shopping/product/111' },
+    { position: 4, title: 'Samsung Galaxy S24 5G (8GB, 256GB) Onyx Black', source: 'Reliance Digital', extracted_price: 74999, link: 'https://www.reliancedigital.in/samsung-galaxy-s24/p/494351234', product_id: '222' },
+    { position: 5, title: 'Broken result without price', source: 'Amazon.in', link: 'https://www.amazon.in/x' },
+  ],
+});
 
 let server, base, db, token;
 const call = async (path, { method = 'GET', body, auth = true } = {}) => {
@@ -14,6 +25,7 @@ const call = async (path, { method = 'GET', body, auth = true } = {}) => {
   });
   return { status: res.status, body: await res.json() };
 };
+const ingest = (q, price) => call('/live/ingest', { method: 'POST', body: { query: q, offers: normalizeResults(serp(price)) } });
 
 before(async () => {
   db = openDb(':memory:');
@@ -24,124 +36,111 @@ before(async () => {
 });
 after(() => server.close());
 
-test('search finds products across platforms and filters work', async () => {
-  const r = await call('/products?q=jackets');
+test('no preloaded products: the catalogue starts empty', async () => {
+  assert.equal(db.prepare('SELECT COUNT(*) c FROM products').get().c, 0);
+  assert.equal((await call('/products')).body.total, 0);
+  const meta = (await call('/meta')).body;
+  assert.ok(meta.platforms.find((p) => p.id === 'amazon').searchUrl.startsWith('https://www.amazon.in/s?k='));
+});
+
+test('normalises live results and maps stores', () => {
+  const offers = normalizeResults(serp());
+  assert.equal(offers.length, 4, 'drops results without a price');
+  assert.equal(offers[2].price, 65499, 'parses "₹65,499.00"');
+  assert.equal(offers[2].link, 'https://www.google.com/shopping/product/111', 'falls back to the Google Shopping page');
+  assert.equal(platformIdFor('Amazon.in'), 'amazon');
+  assert.equal(platformIdFor('Reliance Digital'), 'reliance');
+  assert.equal(platformIdFor('Vijay Sales'), 'vijay-sales');
+  const groups = groupOffers(offers);
+  assert.equal(groups.length, 2, 'same iPhone across 3 stores is one product');
+  assert.equal(groups[0].offers.length, 3);
+});
+
+test('ingest stores real links, groups stores and caches the query', async () => {
+  const r = await ingest('iphone 15', 64999);
   assert.equal(r.status, 200);
-  assert.ok(r.body.total >= 5);
-  assert.ok(r.body.items.every((i) => /jacket|windcheater/i.test(i.title)));
-  const multi = r.body.items.find((i) => i.platforms.length > 1);
-  const single = r.body.items.find((i) => i.platforms.length === 1);
-  assert.ok(multi && single, 'has both multi-store and exclusive products');
-  const f = await call('/products?category=mobiles&sort=price_asc');
-  const prices = f.body.items.map((i) => i.bestPrice);
-  assert.deepEqual(prices, [...prices].sort((a, b) => a - b));
-  assert.equal((await call('/products?sort=bogus')).status, 400);
+  assert.equal(r.body.items.length, 2);
+  const iphone = r.body.items[0];
+  assert.deepEqual([...iphone.platforms].sort(), ['amazon', 'croma', 'flipkart']);
+  assert.equal(iphone.bestPrice, 64999);
+  assert.equal(iphone.image, 'https://example-cdn.test/iphone.jpg');
+  const d = (await call(`/products/${iphone.slug}`)).body;
+  assert.equal(d.listings[0].url, 'https://www.amazon.in/dp/B0CHX1W1XY');
+  assert.equal(d.verdict, null, 'no buy verdict without real history');
+  assert.ok(d.trackedSince);
+  const c = (await call('/live/cached?q=IPHONE%2015')).body;
+  assert.equal(c.fresh, true);
+  assert.equal(c.items.length, 2);
+  assert.equal((await call('/live/cached?q=unknown')).body.fresh, false);
+  // Local search finds ingested products.
+  assert.equal((await call('/products?q=galaxy')).body.total, 1);
 });
 
-test('product detail returns sorted offers, history and verdict', async () => {
-  const { body } = await call('/products?q=iphone');
-  const slug = body.items[0].slug;
-  const d = await call(`/products/${slug}`);
-  assert.equal(d.status, 200);
-  const inStock = d.body.listings.filter((l) => l.inStock).map((l) => l.effectivePrice);
-  assert.deepEqual(inStock, [...inStock].sort((a, b) => a - b));
-  const h = await call(`/products/${slug}/history?days=30`);
-  for (const pts of Object.values(h.body.series)) assert.ok(pts.length >= 30);
-  assert.equal((await call('/products/nope')).status, 404);
+test('re-checking updates the same product and records real history', async () => {
+  const before = db.prepare('SELECT COUNT(*) c FROM products').get().c;
+  await ingest('iphone 15', 62999);
+  assert.equal(db.prepare('SELECT COUNT(*) c FROM products').get().c, before, 'no duplicates');
+  const slug = (await call('/products?q=iphone')).body.items[0].slug;
+  const d = (await call(`/products/${slug}`)).body;
+  assert.equal(d.listings[0].price, 62999);
+  const h = (await call(`/products/${slug}/history?days=7`)).body;
+  assert.ok(h.series.amazon.some(([, p]) => p === 62999));
 });
 
-test('home feed returns diversified trending and best sellers with a 12h schedule', async () => {
-  const r = await call('/deals');
-  assert.equal(r.body.trending.length, 12);
-  assert.equal(r.body.bestsellers.length, 12);
-  const perCat = {};
-  for (const p of r.body.trending) perCat[p.category] = (perCat[p.category] || 0) + 1;
-  assert.ok(Math.max(...Object.values(perCat)) <= 3);
-  assert.equal(r.body.feedNextUpdateAt - r.body.feedUpdatedAt, 12 * 3600 * 1000);
-  const again = await call('/deals');
-  assert.equal(again.body.feedUpdatedAt, r.body.feedUpdatedAt, 'snapshot is stable between refreshes');
-});
-
-test('auth: signup, login, bad password, protected routes', async () => {
-  assert.equal((await call('/cart', { auth: false })).status, 401);
-  const s = await call('/auth/signup', { method: 'POST', body: { name: 'Test', email: 'T@x.com', password: 'password123' } });
-  assert.equal(s.status, 200);
-  assert.equal((await call('/auth/signup', { method: 'POST', body: { name: 'Test', email: 't@x.com', password: 'password123' } })).status, 409);
+test('auth, watchlist and alerts on real products', async () => {
+  assert.equal((await call('/watchlist', { auth: false })).status, 401);
+  const s = await call('/auth/signup', { method: 'POST', body: { name: 'Test', email: 't@x.com', password: 'password123' } });
+  token = s.body.token;
   assert.equal((await call('/auth/login', { method: 'POST', body: { email: 't@x.com', password: 'wrong' } })).status, 401);
-  const l = await call('/auth/login', { method: 'POST', body: { email: 't@x.com', password: 'password123' } });
-  token = l.body.token;
-  assert.equal((await call('/auth/me')).body.user.email, 't@x.com');
-});
-
-test('cart → checkout splits per platform, is idempotent and guards price changes', async () => {
-  const items = (await call('/products?category=audio')).body.items;
-  const a = (await call(`/products/${items[0].slug}`)).body.listings.find((l) => l.inStock);
-  const b = (await call(`/products/${items[1].slug}`)).body.listings.find((l) => l.inStock && l.platformId !== a.platformId);
-  await call('/cart', { method: 'POST', body: { listingId: a.id } });
-  const cart = (await call('/cart', { method: 'POST', body: { listingId: b.id, qty: 2 } })).body;
-  assert.equal(cart.count, 3);
-  assert.equal(cart.groups.length, 2);
-  const address = { name: 'Test User', phone: '9876543210', line1: '1 Test Street', city: 'Pune', state: 'MH', pincode: '411001' };
-
-  const stale = await call('/checkout', { method: 'POST', body: { address, paymentMethod: 'upi', expectedTotal: cart.total + 1, idempotencyKey: 'key-stale-1' } });
-  assert.equal(stale.status, 409);
-  assert.equal(stale.body.details.code, 'PRICE_CHANGED');
-
-  const bad = await call('/checkout', { method: 'POST', body: { address: { ...address, pincode: '12' }, paymentMethod: 'upi', expectedTotal: cart.total, idempotencyKey: 'key-bad-1' } });
-  assert.equal(bad.status, 400);
-
-  const ok = await call('/checkout', { method: 'POST', body: { address, paymentMethod: 'upi', expectedTotal: cart.total, idempotencyKey: 'key-good-1' } });
-  assert.equal(ok.status, 200);
-  const dup = await call('/checkout', { method: 'POST', body: { address, paymentMethod: 'upi', expectedTotal: cart.total, idempotencyKey: 'key-good-1' } });
-  assert.equal(dup.body.orderId, ok.body.orderId);
-  assert.equal((await call('/cart')).body.count, 0);
-
-  const order = (await call(`/orders/${ok.body.orderId}`)).body;
-  assert.equal(order.shipments.length, 2);
-  assert.equal(order.total, cart.total);
-  assert.equal(order.status, 'placed');
-  const c = await call(`/orders/${ok.body.orderId}/cancel`, { method: 'POST' });
-  assert.equal(c.body.status, 'cancelled');
-  assert.equal((await call(`/orders/${ok.body.orderId}/cancel`, { method: 'POST' })).status, 409);
-});
-
-test('price alerts fire a notification when the price drops below target', async () => {
-  const p = (await call('/products?q=sony')).body.items[0];
-  await call('/alerts', { method: 'POST', body: { productId: p.id, targetPrice: p.bestPrice - 1 } });
-  assert.equal((await call('/alerts')).body.items[0].active, true);
-  // Force a price drop through the provider path.
-  db.prepare('UPDATE listings SET base_price = ?, price = ? WHERE product_id = ? AND in_stock = 1').run(Math.round(p.bestPrice * 0.5), Math.round(p.bestPrice * 0.5), p.id);
-  refreshPrices(db, { fraction: 1, rnd: () => 0.5 });
-  const n = (await call('/notifications')).body;
-  assert.ok(n.items.some((x) => x.title.includes('Price drop')));
-  assert.equal((await call('/alerts')).body.items[0].active, false);
-});
-
-test('resolve pasted store URLs', async () => {
-  const url = db.prepare("SELECT url FROM listings WHERE platform_id='flipkart' LIMIT 1").get().url;
-  assert.equal((await call(`/resolve?url=${encodeURIComponent(url)}`)).status, 200);
-  assert.equal((await call(`/resolve?url=${encodeURIComponent('https://example.com/x')}`)).status, 404);
-  assert.equal((await call('/resolve?url=notaurl')).status, 400);
-});
-
-test('cloud backup: export → wipe → import restores the same data', async () => {
-  const before = (await call('/sync/export')).body;
-  assert.ok(before.orders.length >= 1 && before.alerts.length >= 1);
-  const p = (await call('/products?q=boat')).body.items[0];
+  const p = (await call('/products?q=iphone')).body.items[0];
   await call(`/watchlist/${p.id}`, { method: 'POST' });
+  assert.equal((await call('/watchlist')).body.items.length, 1);
+  const a = await call('/alerts', { method: 'POST', body: { productId: p.id, targetPrice: 60000 } });
+  assert.equal(a.body.triggered, false);
+  await ingest('iphone 15', 59999); // a real price drop arrives
+  const n = (await call('/notifications')).body;
+  assert.ok(n.items.some((x) => x.title.startsWith('Price drop') && x.body.includes('59,999')));
+  assert.equal((await call('/alerts')).body.items[0].active, false);
+  // Target already met → fires immediately.
+  const g = (await call('/products?q=galaxy')).body.items[0];
+  assert.equal((await call('/alerts', { method: 'POST', body: { productId: g.id, targetPrice: 80000 } })).body.triggered, true);
+});
+
+test('cloud backup restores watchlist and alerts on a fresh device', async () => {
   const snap = (await call('/sync/export')).body;
-  // Simulate a fresh device: wipe this user's data, then restore from the snapshot.
-  const uid = db.prepare("SELECT id FROM users WHERE email='t@x.com'").get().id;
-  for (const t of ['watchlist', 'alerts', 'notifications', 'orders']) db.prepare(`DELETE FROM ${t} WHERE user_id=?`).run(uid);
-  assert.equal((await call('/watchlist')).body.items.length, 0);
-  assert.equal((await call('/sync/import', { method: 'POST', body: { snapshot: snap } })).status, 200);
-  const after = (await call('/sync/export')).body;
-  for (const k of ['watchlist', 'alerts', 'cart', 'notifications']) assert.equal(after[k].length, snap[k].length, k);
-  assert.deepEqual(after.orders.map((o) => [o.total, o.items.length, o.cancelled_at]), snap.orders.map((o) => [o.total, o.items.length, o.cancelled_at]));
+  assert.ok(snap.watchlist[0].product.offers.length >= 3);
+  // Fresh device: empty database, new local account.
+  const db2 = openDb(':memory:');
+  seed(db2);
+  const s2 = createApp(db2, { log: { error() {} } }).listen(0);
+  await new Promise((r) => s2.once('listening', r));
+  const b2 = `http://localhost:${s2.address().port}/api`;
+  const post = (path, body, tok) => fetch(b2 + path, { method: 'POST', headers: { 'content-type': 'application/json', ...(tok ? { authorization: `Bearer ${tok}` } : {}) }, body: JSON.stringify(body) }).then(async (r) => ({ status: r.status, body: await r.json() }));
+  try {
+    const tok = (await post('/auth/signup', { name: 'Test', email: 't@x.com', password: 'password123' })).body.token;
+    assert.equal((await post('/sync/import', { snapshot: snap }, tok)).status, 200);
+    const w = await fetch(`${b2}/watchlist`, { headers: { authorization: `Bearer ${tok}` } }).then((r) => r.json());
+    assert.equal(w.items.length, snap.watchlist.length);
+    assert.ok(w.items.some((p) => p.offers === 3 && p.platforms.includes('amazon')));
+    const al = await fetch(`${b2}/alerts`, { headers: { authorization: `Bearer ${tok}` } }).then((r) => r.json());
+    assert.equal(al.items.length, snap.alerts.length);
+  } finally { s2.close(); }
   assert.equal((await call('/sync/import', { method: 'POST', body: { snapshot: { version: 2 } } })).status, 400);
 });
 
-test('google sign-in requires server configuration and rejects forged tokens', async () => {
-  const r = await call('/auth/google', { method: 'POST', body: { idToken: 'x'.repeat(40) }, auth: false });
-  assert.equal(r.status, 501);
+test('live search without a key, Google sign-in config guard, validation', async () => {
+  assert.equal((await call('/live/search?q=phone')).status, 501);
+  assert.equal((await call('/auth/google', { method: 'POST', body: { idToken: 'x'.repeat(40) }, auth: false })).status, 501);
+  assert.equal((await call('/live/ingest', { method: 'POST', body: { query: 'x', offers: [{ title: 'a', source: 'b', price: -1, link: 'nope' }] } })).status, 400);
+});
+
+test('pasted store links resolve to tracked products', async () => {
+  assert.equal((await call(`/resolve?url=${encodeURIComponent('https://www.amazon.in/dp/B0CHX1W1XY')}`)).status, 200);
+  assert.equal((await call('/resolve?url=notaurl')).status, 400);
+});
+
+test('account deletion removes the user and their data', async () => {
+  assert.equal((await call('/auth/me', { method: 'DELETE' })).status, 200);
+  assert.equal(db.prepare("SELECT COUNT(*) c FROM users WHERE email='t@x.com'").get().c, 0);
+  assert.equal(db.prepare('SELECT COUNT(*) c FROM watchlist').get().c, 0);
 });

@@ -61,7 +61,7 @@ function QuickView({ item, onClose }: { item: Summary; onClose: () => void }) {
       <div className="modal" role="dialog" aria-modal="true" aria-labelledby="qv-title" tabIndex={-1} ref={ref}>
         <button className="modal-close icon-btn" onClick={onClose} aria-label="Close">✕</button>
         <div className="qv-head">
-          <Thumb emoji={item.emoji} hue={item.hue} size="sm" />
+          <Thumb emoji={item.emoji} hue={item.hue} image={item.image} size="sm" />
           <div>
             <div className="xs muted">{item.brand}</div>
             <h2 id="qv-title" className="qv-title">{item.title}</h2>
@@ -79,7 +79,7 @@ function QuickView({ item, onClose }: { item: Summary; onClose: () => void }) {
             {data.verdict && <div className={`verdict ${data.verdict.level}`}>{data.verdict.text}</div>}
             <OffersTable listings={data.listings} compact stats={data.stats} />
             <div className="qv-foot">
-              <span className="xs muted">6-month low {money(data.overall.low)} · avg {money(data.overall.avg)}</span>
+              <span className="xs muted">Lowest tracked {money(data.overall.low)}</span>
               <Link to={`/p/${item.slug}`} replace={inModalEntry()} className="btn">Price history & details →</Link>
             </div>
           </>

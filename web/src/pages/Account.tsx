@@ -22,7 +22,6 @@ export default function Account() {
     onError: (e: Error) => toast(e.message, 'err'),
   });
   if (!user) return null;
-  const a = user.address;
 
   return (
     <div className="stack">
@@ -35,7 +34,7 @@ export default function Account() {
         <h3>☁️ Cloud backup</h3>
         {cloud ? (
           <>
-            <p className="sm">Your watchlist, alerts, cart, orders and address are backed up to your Google account and restored whenever you sign in, on any phone.</p>
+            <p className="sm">Your watchlist and price alerts are backed up to your Google account and restored whenever you sign in, on any phone.</p>
             <p className="xs muted">{backedUp ? `Last backup ${ago(backedUp)}` : 'Backs up automatically after each change'}</p>
             <button className="btn" disabled={backup.isPending} onClick={() => backup.mutate()}>{backup.isPending ? 'Backing up…' : 'Back up now'}</button>
           </>
@@ -49,21 +48,15 @@ export default function Account() {
       </div>
 
       <div className="card">
-        <Link to="/orders" className="list-link">📦 Orders <span className="muted">›</span></Link>
         <Link to="/watchlist" className="list-link">👀 Watchlist & price alerts <span className="muted">›</span></Link>
         {isNative && <button className="list-link link" style={{ width: '100%', color: 'inherit' }} onClick={async () => { const on = await enableNotifications(); toast(on ? 'Price-drop notifications are on' : 'Notifications are blocked. Enable them in Android settings', on ? 'ok' : 'err'); }}>🔔 Price-drop notifications <span className="muted">›</span></button>}
-      </div>
-
-      <div className="card pad-lg">
-        <h3>📍 Saved address</h3>
-        {a ? <p className="sm">{a.name}<br />{a.line1}<br />{a.city}, {a.state} {a.pincode}<br />📞 {a.phone}</p> : <p className="sm muted">No address yet. It's saved automatically at your first checkout.</p>}
       </div>
 
       <button className="btn block" onClick={() => { logout(); nav('/', { replace: true }); }}>↩ Sign out</button>
 
       <div className="card pad-lg danger-zone">
         <h3>Delete account</h3>
-        <p className="xs muted">Permanently deletes your account, orders, cart, alerts and cloud backup.</p>
+        <p className="xs muted">Permanently deletes your account, watchlist, alerts and cloud backup.</p>
         <button className="btn danger" disabled={del.isPending} onClick={() => confirm('Delete your account and all data? This cannot be undone.') && del.mutate()}>Delete my account</button>
       </div>
 
